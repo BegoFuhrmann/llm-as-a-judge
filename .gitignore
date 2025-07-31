@@ -1,0 +1,10 @@
+# Ignore Microsoft Office temporary files
+~$*        # any file beginning with ~$ (Word/Excel temp files)
+*.tmp      # any .tmp file
+*.temp     # common temp extension
+
+# (Optionally ignore other OS/editor artifacts)
+.DS_Store
+Thumbs.db
+
+.env
