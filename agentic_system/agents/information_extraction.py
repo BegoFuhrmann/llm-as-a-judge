@@ -1,453 +1,492 @@
 """
-Information Extraction Agent for the Agentic System.
+Information Extraction Agent
+===========================
 
-This agent handles domain-specific entity recognition and relationship mapping
-using Azure OpenAI for advanced NLP capabilities.
+The second agent in the multi-agent system responsible for:
+- LangChain-based information extraction from processed documents
+- Chroma vector database querying for semantic retrieval
+- Structured data extraction using Azure OpenAI
+- Financial document specific extraction patterns
+- Integration with audit trail for compliance
+
+This agent takes processed documents from the Document Collection Agent
+and extracts structured information for decision-making processes.
 """
 
 import asyncio
+import logging
 import json
-import re
-from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
+from typing import List, Dict, Any, Optional, Union
+from dataclasses import dataclass
+from pathlib import Path
 
-# Azure OpenAI integration
-from openai import AsyncAzureOpenAI
+# LangChain ecosystem
+from langchain.schema import Document
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from langchain_openai import AzureChatOpenAI
+from langchain_community.vectorstores import Chroma
+from langchain.output_parsers import PydanticOutputParser
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Local imports
-from ..core.models import (
-    AgentMessage, ExtractionResult, ExtractedEntity, ExtractedRelationship,
-    AgentType, MessageType, ExtractionStatus, AuditEntry
-)
-from ..core.agentic_config import config, logger
+# Pydantic for structured outputs
+from pydantic import BaseModel, Field
+from typing import List as TypingList
+
+import os
+from dotenv import load_dotenv
+from azure.identity import ClientSecretCredential, get_bearer_token_provider
+# Azure integration
+
+from ..core.agentic_config import AgenticConfig
+from ..core.base_agent import BaseAgent
+from ..core.audit_trail import AuditEvent, AuditTrailManager, AuditEventType
+from .document_collection import DocumentCollectionAgent, DocumentCollectionResult
+
+logger = logging.getLogger(__name__)
 
 
-class InformationExtractionAgent:
+# Pydantic models for structured extraction
+class ExtractedEntity(BaseModel):
+    """Represents an extracted entity with metadata."""
+    entity_type: str = Field(description="Type of entity (person, organization, amount, date, etc.)")
+    value: str = Field(description="The extracted value")
+    confidence: float = Field(description="Confidence score 0-1")
+    context: str = Field(description="Surrounding context")
+    source_chunk: str = Field(description="Source document chunk ID")
+
+
+class FinancialMetric(BaseModel):
+    """Represents extracted financial metrics."""
+    metric_name: str = Field(description="Name of the financial metric")
+    value: float = Field(description="Numeric value")
+    currency: Optional[str] = Field(description="Currency if applicable")
+    period: Optional[str] = Field(description="Time period")
+    source: str = Field(description="Source document reference")
+
+
+class ExtractedInformation(BaseModel):
+    """Complete structured information extraction result."""
+    entities: TypingList[ExtractedEntity] = Field(description="Extracted entities")
+    financial_metrics: TypingList[FinancialMetric] = Field(description="Financial metrics")
+    key_insights: TypingList[str] = Field(description="Key insights and findings")
+    risk_indicators: TypingList[str] = Field(description="Identified risk indicators")
+    compliance_notes: TypingList[str] = Field(description="Compliance-related notes")
+    confidence_score: float = Field(description="Overall extraction confidence")
+
+
+@dataclass
+class ExtractionResult:
+    """Result of information extraction processing."""
+    extraction_id: str
+    source_collection: str
+    extracted_info: ExtractedInformation
+    processing_metadata: Dict[str, Any]
+    audit_trail_id: str
+    timestamp: datetime
+
+
+class InformationExtractionAgent(BaseAgent):
     """
-    Agent responsible for domain-specific information extraction.
-    
-    Capabilities:
-    - Named Entity Recognition (NER)
-    - Relationship extraction between entities
-    - Domain-specific pattern recognition
-    - Confidence scoring and validation
+    Information Extraction Agent implementing structured data extraction
+    with LangChain integration and Azure OpenAI.
     """
     
-    def __init__(self):
-        """Initialize the Information Extraction Agent."""
-        self.agent_type = AgentType.INFORMATION_EXTRACTION
-        self.config = config
-        self.logger = logger.bind(agent=self.agent_type.value)
-        
-        # Initialize Azure OpenAI client
-        self.openai_client = AsyncAzureOpenAI(
-            api_key=self.config.azure_openai.api_key,
-            api_version=self.config.azure_openai.api_version,
-            azure_endpoint=self.config.azure_openai.endpoint
+    def __init__(self, config: AgenticConfig, audit_manager: AuditTrailManager):
+        super().__init__(
+            agent_id="info_extraction_001",
+            role="information_extraction",
+            config=config,
+            audit_manager=audit_manager
         )
         
-        # Financial domain entities and relationships
-        self.financial_entities = {
-            "FINANCIAL_INSTRUMENT": ["bond", "stock", "derivative", "option", "future", "swap"],
-            "REGULATION": ["GDPR", "MiFID", "Basel", "Solvency", "EMIR", "PCI DSS"],
-            "ORGANIZATION": ["bank", "institution", "authority", "regulator", "ECB", "EBA"],
-            "CURRENCY": ["EUR", "USD", "GBP", "CHF", "JPY"],
-            "AMOUNT": r"\d+(?:,\d{3})*(?:\.\d{2})?",
-            "DATE": r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}",
-            "PERCENTAGE": r"\d+(?:\.\d+)?%"
-        }
+        self.llm: Optional[AzureChatOpenAI] = None
+        self.vector_store: Optional[Chroma] = None
+        self.extraction_chain: Optional[LLMChain] = None
         
-        self.relationship_types = [
-            "REGULATORY_COMPLIANCE",
-            "FINANCIAL_EXPOSURE",
-            "COUNTERPARTY_RISK",
-            "REPORTING_OBLIGATION",
-            "CAPITAL_REQUIREMENT",
-            "OPERATIONAL_DEPENDENCY"
-        ]
-        
-        self.logger.info("Information Extraction Agent initialized")
+        self._initialize_components()
     
-    async def extract_information(self, text: str, document_id: str) -> ExtractionResult:
+    def _initialize_components(self) -> None:
+        """Initialize Azure OpenAI LLM and extraction chains."""
+        try:
+            # Initialize Azure OpenAI with managed identity
+            credential = DefaultAzureCredential()
+            
+            self.llm = AzureChatOpenAI(
+                azure_endpoint=self.config.azure_openai.endpoint,
+                azure_deployment=self.config.azure_openai.deployment_name,
+                api_version=self.config.azure_openai.api_version,
+                azure_ad_token_provider=credential,
+                temperature=self.config.azure_openai.temperature,
+                max_tokens=self.config.azure_openai.max_tokens
+            )
+            
+            # Initialize vector store connection
+            self.vector_store = Chroma(
+                collection_name="documents_doc_collection_001",
+                persist_directory="./chroma_storage"
+            )
+            
+            # Initialize extraction chain
+            self._setup_extraction_chain()
+            
+            logger.info("Information Extraction Agent initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Information Extraction Agent: {e}")
+            raise
+    
+    def _setup_extraction_chain(self) -> None:
+        """Setup the LangChain extraction chain with structured output."""
+        
+        # Create output parser
+        parser = PydanticOutputParser(pydantic_object=ExtractedInformation)
+        
+        # Create extraction prompt template
+        extraction_prompt = PromptTemplate(
+            input_variables=["document_content", "extraction_focus"],
+            partial_variables={"format_instructions": parser.get_format_instructions()},
+            template="""
+You are an expert financial document analyst. Analyze the following document content and extract structured information.
+
+EXTRACTION FOCUS: {extraction_focus}
+
+DOCUMENT CONTENT:
+{document_content}
+
+Extract the following information with high accuracy:
+1. Named entities (organizations, people, dates, amounts)
+2. Financial metrics and KPIs
+3. Key insights and findings
+4. Risk indicators or warning signs
+5. Compliance-related information
+
+Provide confidence scores for each extraction. Be conservative with confidence scores.
+
+{format_instructions}
+
+EXTRACTED INFORMATION:
+"""
+        )
+        
+        # Create extraction chain
+        self.extraction_chain = LLMChain(
+            llm=self.llm,
+            prompt=extraction_prompt,
+            output_parser=parser
+        )
+    
+    async def extract_information(
+        self,
+        collection_result: DocumentCollectionResult,
+        extraction_focus: str = "comprehensive financial analysis",
+        similarity_threshold: float = 0.7
+    ) -> ExtractionResult:
         """
-        Extract entities and relationships from text.
+        Extract structured information from processed documents.
         
         Args:
-            text: Text content to analyze
-            document_id: Unique document identifier
+            collection_result: Result from Document Collection Agent
+            extraction_focus: Specific focus for extraction
+            similarity_threshold: Minimum similarity for relevant chunks
             
         Returns:
-            ExtractionResult with extracted entities and relationships
+            ExtractionResult with structured extracted information
         """
-        start_time = datetime.now()
-        
-        try:
-            # Initialize result
-            result = ExtractionResult(
-                document_id=document_id,
-                extraction_status=ExtractionStatus.IN_PROGRESS
-            )
-            
-            # Extract entities using multiple methods
-            entities = await self._extract_entities_hybrid(text)
-            result.entities = entities
-            
-            # Extract relationships between entities
-            relationships = await self._extract_relationships(text, entities)
-            result.relationships = relationships
-            
-            # Generate summary and key findings
-            summary = await self._generate_summary(text, entities, relationships)
-            result.summary = summary["summary"]
-            result.key_findings = summary["key_findings"]
-            
-            # Calculate confidence score
-            result.confidence_score = self._calculate_confidence(entities, relationships)
-            
-            # Calculate processing time
-            result.processing_time = (datetime.now() - start_time).total_seconds()
-            result.extraction_status = ExtractionStatus.COMPLETED
-            
-            # Log audit entry
-            await self._log_audit_entry("information_extracted", {
-                "document_id": document_id,
-                "entities_count": len(entities),
-                "relationships_count": len(relationships),
-                "confidence_score": result.confidence_score,
-                "processing_time": result.processing_time
-            })
-            
-            self.logger.info("Information extraction completed",
-                           document_id=document_id,
-                           entities_count=len(entities),
-                           relationships_count=len(relationships),
-                           confidence=result.confidence_score)
-            
-            return result
-            
-        except Exception as e:
-            result = ExtractionResult(
-                document_id=document_id,
-                extraction_status=ExtractionStatus.FAILED,
-                error_message=str(e),
-                processing_time=(datetime.now() - start_time).total_seconds()
-            )
-            
-            await self._log_audit_entry("extraction_failed", {
-                "document_id": document_id,
-                "error": str(e)
-            })
-            
-            self.logger.error("Information extraction failed",
-                            document_id=document_id,
-                            error=str(e))
-            
-            return result
-    
-    async def _extract_entities_hybrid(self, text: str) -> List[ExtractedEntity]:
-        """Extract entities using both rule-based and LLM-based methods."""
-        entities = []
-        
-        # Rule-based extraction for well-defined patterns
-        rule_based_entities = self._extract_entities_rules(text)
-        entities.extend(rule_based_entities)
-        
-        # LLM-based extraction for complex entities
-        llm_entities = await self._extract_entities_llm(text)
-        entities.extend(llm_entities)
-        
-        # Deduplicate and merge entities
-        entities = self._deduplicate_entities(entities)
-        
-        return entities
-    
-    def _extract_entities_rules(self, text: str) -> List[ExtractedEntity]:
-        """Extract entities using rule-based pattern matching."""
-        entities = []
-        
-        # Extract pattern-based entities
-        for entity_type, pattern in self.financial_entities.items():
-            if isinstance(pattern, str):  # Regex pattern
-                matches = re.finditer(pattern, text, re.IGNORECASE)
-                for match in matches:
-                    entities.append(ExtractedEntity(
-                        entity_type=entity_type,
-                        text=match.group(),
-                        confidence=0.9,  # High confidence for rule-based
-                        start_position=match.start(),
-                        end_position=match.end(),
-                        context=self._extract_context(text, match.start(), match.end())
-                    ))
-            elif isinstance(pattern, list):  # Keyword list
-                for keyword in pattern:
-                    matches = re.finditer(rf'\b{re.escape(keyword)}\b', text, re.IGNORECASE)
-                    for match in matches:
-                        entities.append(ExtractedEntity(
-                            entity_type=entity_type,
-                            text=match.group(),
-                            confidence=0.85,
-                            start_position=match.start(),
-                            end_position=match.end(),
-                            context=self._extract_context(text, match.start(), match.end())
-                        ))
-        
-        return entities
-    
-    async def _extract_entities_llm(self, text: str) -> List[ExtractedEntity]:
-        """Extract entities using Azure OpenAI LLM."""
-        try:
-            prompt = f"""
-            Extract financial and regulatory entities from the following text. 
-            Focus on:
-            - Financial instruments and products
-            - Regulatory frameworks and compliance requirements
-            - Organizations and institutions
-            - Risk factors and exposures
-            - Compliance obligations
-            
-            Return a JSON array with entities in this format:
-            [{{"entity_type": "TYPE", "text": "entity text", "confidence": 0.8, "context": "surrounding context"}}]
-            
-            Text: {text[:2000]}  # Limit to avoid token limits
-            """
-            
-            response = await self.openai_client.chat.completions.create(
-                model=self.config.azure_openai.chat_model,
-                messages=[
-                    {"role": "system", "content": "You are a financial regulatory expert specializing in entity extraction."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.config.azure_openai.temperature,
-                max_tokens=1500
-            )
-            
-            # Parse JSON response
-            entities_data = json.loads(response.choices[0].message.content)
-            
-            entities = []
-            for entity_data in entities_data:
-                # Find entity position in text
-                entity_text = entity_data["text"]
-                start_pos = text.lower().find(entity_text.lower())
-                
-                if start_pos != -1:
-                    entities.append(ExtractedEntity(
-                        entity_type=entity_data["entity_type"],
-                        text=entity_text,
-                        confidence=entity_data.get("confidence", 0.7),
-                        start_position=start_pos,
-                        end_position=start_pos + len(entity_text),
-                        context=entity_data.get("context", "")
-                    ))
-            
-            return entities
-            
-        except Exception as e:
-            self.logger.error("LLM entity extraction failed", error=str(e))
-            return []
-    
-    async def _extract_relationships(self, text: str, entities: List[ExtractedEntity]) -> List[ExtractedRelationship]:
-        """Extract relationships between identified entities."""
-        if len(entities) < 2:
-            return []
-        
-        try:
-            # Create entity map for reference
-            entity_texts = [entity.text for entity in entities]
-            
-            prompt = f"""
-            Analyze the relationships between these financial entities in the given text:
-            Entities: {', '.join(entity_texts)}
-            
-            Text: {text[:1500]}
-            
-            Identify relationships such as:
-            - Regulatory compliance requirements
-            - Financial exposures and dependencies
-            - Risk relationships
-            - Reporting obligations
-            
-            Return a JSON array with relationships:
-            [{{"source_entity": "entity1", "target_entity": "entity2", "relationship_type": "TYPE", "confidence": 0.8, "context": "explanation"}}]
-            """
-            
-            response = await self.openai_client.chat.completions.create(
-                model=self.config.azure_openai.chat_model,
-                messages=[
-                    {"role": "system", "content": "You are a financial analyst expert in regulatory relationships."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.config.azure_openai.temperature,
-                max_tokens=1000
-            )
-            
-            # Parse JSON response
-            relationships_data = json.loads(response.choices[0].message.content)
-            
-            relationships = []
-            for rel_data in relationships_data:
-                relationships.append(ExtractedRelationship(
-                    source_entity=rel_data["source_entity"],
-                    target_entity=rel_data["target_entity"],
-                    relationship_type=rel_data["relationship_type"],
-                    confidence=rel_data.get("confidence", 0.7),
-                    context=rel_data.get("context", "")
-                ))
-            
-            return relationships
-            
-        except Exception as e:
-            self.logger.error("Relationship extraction failed", error=str(e))
-            return []
-    
-    async def _generate_summary(self, text: str, entities: List[ExtractedEntity], 
-                              relationships: List[ExtractedRelationship]) -> Dict[str, Any]:
-        """Generate summary and key findings from extracted information."""
-        try:
-            entity_summary = {entity_type: [] for entity_type in self.financial_entities.keys()}
-            for entity in entities:
-                if entity.entity_type in entity_summary:
-                    entity_summary[entity.entity_type].append(entity.text)
-            
-            prompt = f"""
-            Based on the extracted entities and relationships, provide:
-            1. A concise summary of the document's regulatory and financial content
-            2. Key findings and important insights
-            
-            Entities found: {json.dumps(entity_summary, indent=2)}
-            Relationships: {len(relationships)} relationships identified
-            
-            Text excerpt: {text[:1000]}
-            
-            Return JSON format:
-            {{"summary": "document summary", "key_findings": ["finding1", "finding2", ...]}}
-            """
-            
-            response = await self.openai_client.chat.completions.create(
-                model=self.config.azure_openai.chat_model,
-                messages=[
-                    {"role": "system", "content": "You are a financial regulatory analyst providing executive summaries."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.config.azure_openai.temperature,
-                max_tokens=800
-            )
-            
-            return json.loads(response.choices[0].message.content)
-            
-        except Exception as e:
-            self.logger.error("Summary generation failed", error=str(e))
-            return {"summary": "Summary generation failed", "key_findings": []}
-    
-    def _extract_context(self, text: str, start: int, end: int, window: int = 50) -> str:
-        """Extract context around an entity."""
-        context_start = max(0, start - window)
-        context_end = min(len(text), end + window)
-        return text[context_start:context_end].strip()
-    
-    def _deduplicate_entities(self, entities: List[ExtractedEntity]) -> List[ExtractedEntity]:
-        """Remove duplicate entities based on text and position overlap."""
-        unique_entities = []
-        
-        for entity in entities:
-            is_duplicate = False
-            for existing in unique_entities:
-                # Check for text overlap
-                if (entity.text.lower() == existing.text.lower() or
-                    self._positions_overlap(entity, existing)):
-                    # Keep the one with higher confidence
-                    if entity.confidence > existing.confidence:
-                        unique_entities.remove(existing)
-                        unique_entities.append(entity)
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                unique_entities.append(entity)
-        
-        return unique_entities
-    
-    def _positions_overlap(self, entity1: ExtractedEntity, entity2: ExtractedEntity) -> bool:
-        """Check if two entities have overlapping positions."""
-        return not (entity1.end_position <= entity2.start_position or 
-                   entity2.end_position <= entity1.start_position)
-    
-    def _calculate_confidence(self, entities: List[ExtractedEntity], 
-                            relationships: List[ExtractedRelationship]) -> float:
-        """Calculate overall confidence score for extraction results."""
-        if not entities:
-            return 0.0
-        
-        entity_confidence = sum(entity.confidence for entity in entities) / len(entities)
-        
-        if not relationships:
-            return entity_confidence * 0.8  # Penalize lack of relationships
-        
-        relationship_confidence = sum(rel.confidence for rel in relationships) / len(relationships)
-        
-        # Weighted average
-        return (entity_confidence * 0.6 + relationship_confidence * 0.4)
-    
-    async def _log_audit_entry(self, action: str, details: Dict[str, Any]) -> None:
-        """Log audit entry for extraction actions."""
-        if not self.config.agent_coordination.audit_enabled:
-            return
-        
-        audit_entry = AuditEntry(
-            entry_id=f"extract_{datetime.now().timestamp()}",
-            agent_type=self.agent_type,
-            action=action,
-            details=details
+        audit_event = AuditEvent(
+            event_id="",
+            agent_id=self.agent_id,
+            event_type=AuditEventType.DATA_PROCESSING,
+            action="extract_information",
+            input_data={
+                "collection_id": collection_result.vector_store_collection,
+                "extraction_focus": extraction_focus,
+                "num_documents": len(collection_result.processed_documents)
+            },
+            timestamp=datetime.now()
         )
         
         try:
-            with open(self.config.agent_coordination.audit_log_path, 'a') as f:
-                f.write(audit_entry.to_json() + "\n")
+            self.update_status("processing", "information_extraction")
+            
+            # Gather relevant document chunks
+            relevant_chunks = await self._gather_relevant_chunks(
+                collection_result, extraction_focus, similarity_threshold
+            )
+            
+            # Combine chunks for extraction
+            combined_content = self._combine_chunks(relevant_chunks)
+            
+            # Perform extraction using LangChain
+            extracted_info = await self._perform_extraction(
+                combined_content, extraction_focus
+            )
+            
+            # Generate extraction metadata
+            processing_metadata = {
+                "chunks_processed": len(relevant_chunks),
+                "total_content_length": len(combined_content),
+                "extraction_focus": extraction_focus,
+                "processing_time": datetime.now(),
+                "model_used": self.config.azure_openai.deployment_name
+            }
+            
+            # Create result
+            result = ExtractionResult(
+                extraction_id=f"extract_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                source_collection=collection_result.vector_store_collection,
+                extracted_info=extracted_info,
+                processing_metadata=processing_metadata,
+                audit_trail_id=audit_event.event_id,
+                timestamp=datetime.now()
+            )
+            
+            # Log performance metrics
+            await self.log_performance_metric("extraction_confidence", extracted_info.confidence_score)
+            await self.log_performance_metric("entities_extracted", len(extracted_info.entities))
+            await self.log_performance_metric("financial_metrics_found", len(extracted_info.financial_metrics))
+            
+            # Complete audit event
+            audit_event.output_data = {
+                "extraction_id": result.extraction_id,
+                "entities_count": len(extracted_info.entities),
+                "financial_metrics_count": len(extracted_info.financial_metrics),
+                "overall_confidence": extracted_info.confidence_score,
+                "success": True
+            }
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
+            
+            self.update_status("completed", None)
+            return result
+            
         except Exception as e:
-            self.logger.error("Failed to write audit entry", error=str(e))
+            audit_event.error = str(e)
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
+            
+            self.update_status("error", None)
+            logger.error(f"Information extraction failed: {e}")
+            raise
     
-    async def handle_message(self, message: AgentMessage) -> AgentMessage:
-        """Handle incoming messages from other agents."""
+    async def _gather_relevant_chunks(
+        self,
+        collection_result: DocumentCollectionResult,
+        query: str,
+        threshold: float
+    ) -> List[Document]:
+        """Gather relevant document chunks using semantic search."""
+        
+        if not self.vector_store:
+            raise RuntimeError("Vector store not initialized")
+        
         try:
-            if message.message_type == MessageType.REQUEST:
-                content = message.content
-                
-                if content.get("action") == "extract_information":
-                    text = content["text"]
-                    document_id = content["document_id"]
-                    
-                    result = await self.extract_information(text, document_id)
-                    
-                    return AgentMessage(
-                        sender=self.agent_type,
-                        recipient=message.sender,
-                        message_type=MessageType.RESPONSE,
-                        content={
-                            "status": "success",
-                            "extraction_result": result.to_dict()
-                        },
-                        correlation_id=message.message_id
-                    )
-            
-            # Unknown action
-            return AgentMessage(
-                sender=self.agent_type,
-                recipient=message.sender,
-                message_type=MessageType.ERROR,
-                content={
-                    "error": f"Unknown action: {message.content.get('action', 'none')}"
-                },
-                correlation_id=message.message_id
+            # Perform semantic search
+            relevant_docs = self.vector_store.similarity_search_with_score(
+                query=query,
+                k=20  # Get more chunks for comprehensive extraction
             )
+            
+            # Filter by similarity threshold
+            filtered_docs = [
+                doc for doc, score in relevant_docs 
+                if score >= threshold
+            ]
+            
+            logger.info(f"Found {len(filtered_docs)} relevant chunks above threshold {threshold}")
+            return filtered_docs
             
         except Exception as e:
-            self.logger.error("Message handling failed", error=str(e))
-            return AgentMessage(
-                sender=self.agent_type,
-                recipient=message.sender,
-                message_type=MessageType.ERROR,
-                content={
-                    "error": str(e)
-                },
-                correlation_id=message.message_id
+            logger.error(f"Failed to gather relevant chunks: {e}")
+            # Fallback: use all chunks from collection result
+            all_chunks = []
+            for doc in collection_result.processed_documents:
+                all_chunks.extend(doc.chunks)
+            return all_chunks[:10]  # Limit for processing
+    
+    def _combine_chunks(self, chunks: List[Document]) -> str:
+        """Combine document chunks into coherent content for extraction."""
+        
+        # Sort chunks by source and preserve structure
+        chunks_by_source = {}
+        for chunk in chunks:
+            source = chunk.metadata.get("source", "unknown")
+            if source not in chunks_by_source:
+                chunks_by_source[source] = []
+            chunks_by_source[source].append(chunk)
+        
+        # Combine content with source information
+        combined_parts = []
+        for source, source_chunks in chunks_by_source.items():
+            combined_parts.append(f"\n=== SOURCE: {source} ===\n")
+            for chunk in source_chunks:
+                combined_parts.append(chunk.page_content)
+                combined_parts.append("\n---\n")
+        
+        return "\n".join(combined_parts)
+    
+    async def _perform_extraction(
+        self,
+        content: str,
+        extraction_focus: str
+    ) -> ExtractedInformation:
+        """Perform the actual information extraction using LangChain."""
+        
+        try:
+            # Run extraction chain
+            result = await self.extraction_chain.arun(
+                document_content=content,
+                extraction_focus=extraction_focus
             )
+            
+            # Ensure result is ExtractedInformation object
+            if isinstance(result, str):
+                # Parse JSON if returned as string
+                result_dict = json.loads(result)
+                result = ExtractedInformation(**result_dict)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Extraction chain failed: {e}")
+            
+            # Return empty but valid result
+            return ExtractedInformation(
+                entities=[],
+                financial_metrics=[],
+                key_insights=["Extraction failed due to processing error"],
+                risk_indicators=["Unable to assess risks due to extraction failure"],
+                compliance_notes=["Manual review required due to extraction failure"],
+                confidence_score=0.0
+            )
+    
+    async def query_extracted_information(
+        self,
+        extraction_result: ExtractionResult,
+        query: str
+    ) -> Dict[str, Any]:
+        """
+        Query the extracted information using natural language.
+        
+        Args:
+            extraction_result: Previous extraction result
+            query: Natural language query
+            
+        Returns:
+            Query response with relevant information
+        """
+        audit_event = AuditEvent(
+            event_id="",
+            agent_id=self.agent_id,
+            event_type=AuditEventType.USER_INTERACTION,
+            action="query_extracted_information",
+            input_data={"query": query, "extraction_id": extraction_result.extraction_id},
+            timestamp=datetime.now()
+        )
+        
+        try:
+            # Create query context from extracted information
+            context = self._create_query_context(extraction_result.extracted_info)
+            
+            # Create query prompt
+            query_prompt = PromptTemplate(
+                input_variables=["context", "query"],
+                template="""
+Based on the following extracted information, answer the user's query.
+
+EXTRACTED INFORMATION CONTEXT:
+{context}
+
+USER QUERY: {query}
+
+Provide a comprehensive answer based only on the available extracted information.
+If the information is not available, clearly state that.
+
+RESPONSE:
+"""
+            )
+            
+            # Create query chain
+            query_chain = LLMChain(llm=self.llm, prompt=query_prompt)
+            
+            # Execute query
+            response = await query_chain.arun(context=context, query=query)
+            
+            result = {
+                "query": query,
+                "response": response,
+                "extraction_id": extraction_result.extraction_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Complete audit event
+            audit_event.output_data = result
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
+            
+            return result
+            
+        except Exception as e:
+            audit_event.error = str(e)
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
+            
+            logger.error(f"Query processing failed: {e}")
+            raise
+    
+    def _create_query_context(self, extracted_info: ExtractedInformation) -> str:
+        """Create context string from extracted information for querying."""
+        context_parts = []
+        
+        # Add entities
+        if extracted_info.entities:
+            context_parts.append("ENTITIES:")
+            for entity in extracted_info.entities:
+                context_parts.append(f"- {entity.entity_type}: {entity.value} (confidence: {entity.confidence})")
+        
+        # Add financial metrics
+        if extracted_info.financial_metrics:
+            context_parts.append("\nFINANCIAL METRICS:")
+            for metric in extracted_info.financial_metrics:
+                currency_str = f" {metric.currency}" if metric.currency else ""
+                period_str = f" ({metric.period})" if metric.period else ""
+                context_parts.append(f"- {metric.metric_name}: {metric.value}{currency_str}{period_str}")
+        
+        # Add insights
+        if extracted_info.key_insights:
+            context_parts.append("\nKEY INSIGHTS:")
+            for insight in extracted_info.key_insights:
+                context_parts.append(f"- {insight}")
+        
+        # Add risk indicators
+        if extracted_info.risk_indicators:
+            context_parts.append("\nRISK INDICATORS:")
+            for risk in extracted_info.risk_indicators:
+                context_parts.append(f"- {risk}")
+        
+        return "\n".join(context_parts)
+    
+    async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main processing method for the Information Extraction Agent.
+        
+        Args:
+            input_data: Should contain 'collection_result' and optional 'extraction_focus'
+            
+        Returns:
+            Processing results
+        """
+        collection_result = input_data.get("collection_result")
+        extraction_focus = input_data.get("extraction_focus", "comprehensive financial analysis")
+        
+        if not collection_result:
+            raise ValueError("collection_result is required in input_data")
+        
+        result = await self.extract_information(collection_result, extraction_focus)
+        
+        return {
+            "extraction_result": result,
+            "success": True,
+            "agent_id": self.agent_id
+        }

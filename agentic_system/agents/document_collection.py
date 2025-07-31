@@ -1,521 +1,433 @@
 """
-Document Collection Agent for the Agentic System.
+Document Collection Agent
+========================
 
-This agent handles document parsing, processing, and indexing using:
-- PDF processing via pdfplumber and PyMuPDF
-- DOCX processing via python-docx
-- LangChain integration with Chroma vector store
-- Multi-modal content extraction (text, tables, images)
+The first agent in the multi-agent system responsible for:
+- Multi-modal document parsing (PDF, DOCX, tables, images)
+- LangChain-based document processing pipeline
+- Chroma vector database indexing
+- Integration with Azure OpenAI for semantic understanding
+
+This agent processes document collections and prepares structured data
+for the Information Extraction Agent while maintaining comprehensive
+audit trails for regulatory compliance.
 """
 
 import asyncio
-import hashlib
 import logging
+import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import List, Dict, Any, Optional, Union
+from dataclasses import dataclass
 from datetime import datetime
-import json
 
 # Document processing libraries
 import pdfplumber
 import fitz  # PyMuPDF
 from docx import Document as DocxDocument
+import pandas as pd
 from PIL import Image
 
-# LangChain imports
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+# LangChain ecosystem
 from langchain.schema import Document
-from langchain_openai import AzureOpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-
-# Local imports
-from ..core.models import (
-    AgentMessage, DocumentMetadata, DocumentType, AgentType, 
-    MessageType, AuditEntry, ProcessingStats
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.document_loaders import (
+    PyPDFLoader, Docx2txtLoader, TextLoader
 )
-from ..core.agentic_config import config, logger
+
+from ..core.agentic_config import AgenticConfig, DocumentProcessingConfig
+from ..core.base_agent import BaseAgent
+from ..core.audit_trail import AuditEvent, AuditTrailManager
+
+logger = logging.getLogger(__name__)
 
 
-class DocumentProcessingError(Exception):
-    """Custom exception for document processing errors."""
-    pass
+@dataclass
+class ProcessedDocument:
+    """Structured representation of a processed document."""
+    document_id: str
+    source_path: str
+    content: str
+    metadata: Dict[str, Any]
+    chunks: List[Document]
+    tables: List[pd.DataFrame]
+    images: List[Dict[str, Any]]
+    processing_timestamp: datetime
+    confidence_score: float
 
 
-class DocumentCollectionAgent:
+@dataclass 
+class DocumentCollectionResult:
+    """Result of document collection processing."""
+    processed_documents: List[ProcessedDocument]
+    vector_store_collection: str
+    total_chunks: int
+    processing_summary: Dict[str, Any]
+    audit_trail_id: str
+
+
+class DocumentCollectionAgent(BaseAgent):
     """
-    Agent responsible for document collection, parsing, and indexing.
-    
-    Capabilities:
-    - Multi-format document parsing (PDF, DOCX, TXT)
-    - Text chunking and embedding generation
-    - Vector store indexing with Chroma
-    - Multi-modal content extraction
-    - Metadata management and audit trail
+    Document Collection Agent implementing multi-modal document processing
+    with LangChain integration and Chroma vector storage.
     """
     
-    def __init__(self, agent_config: Optional[Dict[str, Any]] = None):
-        """Initialize the Document Collection Agent."""
-        self.agent_type = AgentType.DOCUMENT_COLLECTION
-        self.config = config
-        self.logger = logger.bind(agent=self.agent_type.value)
-        
-        # Initialize Azure OpenAI embeddings
-        self.embeddings = AzureOpenAIEmbeddings(
-            azure_endpoint=self.config.azure_openai.endpoint,
-            api_key=self.config.azure_openai.api_key,
-            api_version=self.config.azure_openai.api_version,
-            azure_deployment=self.config.azure_openai.embedding_model,
+    def __init__(self, config: AgenticConfig, audit_manager: AuditTrailManager):
+        super().__init__(
+            agent_id="doc_collection_001",
+            role="document_collection",
+            config=config,
+            audit_manager=audit_manager
         )
         
-        # Initialize text splitter
+        self.doc_config = config.document_processing
+        self.vector_store: Optional[Chroma] = None
+        self.embeddings: Optional[HuggingFaceEmbeddings] = None
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.config.document_processing.chunk_size,
-            chunk_overlap=self.config.document_processing.chunk_overlap,
+            chunk_size=self.doc_config.chunk_size,
+            chunk_overlap=self.doc_config.chunk_overlap,
             separators=["\n\n", "\n", " ", ""]
         )
         
-        # Initialize vector store
-        self.vector_store = self._initialize_vector_store()
-        
-        # Processing statistics
-        self.stats = ProcessingStats()
-        
-        self.logger.info("Document Collection Agent initialized")
+        self._initialize_components()
     
-    def _initialize_vector_store(self) -> Chroma:
-        """Initialize or load existing Chroma vector store."""
-        try:
-            vector_store = Chroma(
-                collection_name=self.config.vector_store.collection_name,
-                embedding_function=self.embeddings,
-                persist_directory=self.config.vector_store.persist_directory
-            )
-            self.logger.info("Vector store initialized", 
-                           collection=self.config.vector_store.collection_name)
-            return vector_store
-        except Exception as e:
-            self.logger.error("Failed to initialize vector store", error=str(e))
-            raise DocumentProcessingError(f"Vector store initialization failed: {e}")
+    def _initialize_components(self) -> None:
+        """Initialize local HuggingFace embeddings and Chroma vector store."""
+        # Initialize HuggingFace embeddings
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2",
+            model_kwargs={"device": "cpu"}
+        )
+        # Initialize Chroma vector store
+        self.vector_store = Chroma(
+            collection_name=f"documents_{self.agent_id}",
+            embedding_function=self.embeddings,
+            persist_directory="./chroma_storage"
+        )
+        logger.info("Document Collection Agent initialized with HuggingFace embeddings")
     
-    async def process_document(self, file_path: Path) -> DocumentMetadata:
+    async def process_document_collection(
+        self,
+        document_paths: List[Union[str, Path]],
+        collection_name: str = "financial_documents"
+    ) -> DocumentCollectionResult:
         """
-        Process a single document and return metadata.
+        Process a collection of documents with multi-modal extraction.
         
         Args:
-            file_path: Path to the document to process
+            document_paths: List of document file paths to process
+            collection_name: Name for the document collection
             
         Returns:
-            DocumentMetadata: Metadata about the processed document
-            
-        Raises:
-            DocumentProcessingError: If processing fails
+            DocumentCollectionResult with processed documents and metadata
         """
-        start_time = datetime.now()
+        audit_event = AuditEvent(
+            agent_id=self.agent_id,
+            action="process_document_collection",
+            input_data={"paths": [str(p) for p in document_paths], "collection": collection_name},
+            timestamp=datetime.now()
+        )
         
         try:
-            # Validate file exists and format is supported
-            if not file_path.exists():
-                raise DocumentProcessingError(f"File not found: {file_path}")
+            processed_documents = []
+            all_chunks = []
             
-            file_extension = file_path.suffix.lower()
-            if file_extension not in self.config.document_processing.supported_formats:
-                raise DocumentProcessingError(f"Unsupported file format: {file_extension}")
+            # Process each document
+            for doc_path in document_paths:
+                doc_path = Path(doc_path)
+                logger.info(f"Processing document: {doc_path}")
+                
+                # Process individual document
+                processed_doc = await self._process_single_document(doc_path)
+                processed_documents.append(processed_doc)
+                all_chunks.extend(processed_doc.chunks)
             
-            # Create document metadata
-            metadata = DocumentMetadata(
-                file_path=file_path,
-                document_type=DocumentType(file_extension[1:]),  # Remove dot
-                file_size=file_path.stat().st_size,
-                created_at=datetime.fromtimestamp(file_path.stat().st_ctime)
+            # Add all chunks to vector store
+            if all_chunks and self.vector_store:
+                self.vector_store.add_documents(all_chunks)
+                # Persist to disk for reliability
+                try:
+                    self.vector_store.persist()
+                except Exception:
+                    logger.warning("Failed to persist vector store, continuing")
+                logger.info(f"Added {len(all_chunks)} chunks to vector store")
+            
+            # Create processing summary
+            processing_summary = {
+                "total_documents": len(processed_documents),
+                "total_chunks": len(all_chunks),
+                "processing_time": datetime.now(),
+                "average_confidence": sum(d.confidence_score for d in processed_documents) / len(processed_documents) if processed_documents else 0,
+                "document_types": list(set(Path(d.source_path).suffix for d in processed_documents))
+            }
+            
+            result = DocumentCollectionResult(
+                processed_documents=processed_documents,
+                vector_store_collection=collection_name,
+                total_chunks=len(all_chunks),
+                processing_summary=processing_summary,
+                audit_trail_id=audit_event.event_id
             )
             
-            # Extract content based on file type
-            if file_extension == ".pdf":
-                content_data = await self._process_pdf(file_path)
-            elif file_extension == ".docx":
-                content_data = await self._process_docx(file_path)
-            elif file_extension == ".txt":
-                content_data = await self._process_txt(file_path)
-            else:
-                raise DocumentProcessingError(f"Handler not implemented for {file_extension}")
-            
-            # Update metadata with extraction results
-            metadata.text_length = len(content_data["text"])
-            metadata.has_tables = content_data.get("has_tables", False)
-            metadata.has_images = content_data.get("has_images", False)
-            metadata.page_count = content_data.get("page_count")
-            metadata.content_hash = self._calculate_content_hash(content_data["text"])
-            
-            # Create chunks and add to vector store
-            await self._add_to_vector_store(content_data["text"], metadata)
-            
-            # Mark as successfully processed
-            metadata.processed_at = datetime.now()
-            metadata.extraction_successful = True
-            
-            # Update statistics
-            self.stats.total_documents += 1
-            self.stats.processed_documents += 1
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.stats.average_processing_time = (
-                (self.stats.average_processing_time * (self.stats.processed_documents - 1) + processing_time) 
-                / self.stats.processed_documents
-            )
-            
-            # Log audit entry
-            await self._log_audit_entry("document_processed", {
-                "file_path": str(file_path),
-                "processing_time": processing_time,
+            # Complete audit event
+            audit_event.output_data = {
+                "result_summary": processing_summary,
                 "success": True
-            })
+            }
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
             
-            self.logger.info("Document processed successfully", 
-                           file_path=str(file_path), 
-                           processing_time=processing_time)
-            
-            return metadata
+            return result
             
         except Exception as e:
-            # Update failure statistics
-            self.stats.total_documents += 1
-            self.stats.failed_documents += 1
-            
-            # Log audit entry for failure
-            await self._log_audit_entry("document_processing_failed", {
-                "file_path": str(file_path),
-                "error": str(e),
-                "success": False
-            })
-            
-            self.logger.error("Document processing failed", 
-                            file_path=str(file_path), 
-                            error=str(e))
-            raise DocumentProcessingError(f"Processing failed for {file_path}: {e}")
+            audit_event.error = str(e)
+            audit_event.completed_at = datetime.now()
+            await self.audit_manager.log_event(audit_event)
+            logger.error(f"Document collection processing failed: {e}")
+            raise
     
-    async def _process_pdf(self, file_path: Path) -> Dict[str, Any]:
-        """Process PDF document and extract text, tables, and images."""
-        content_data = {
-            "text": "",
-            "has_tables": False,
-            "has_images": False,
-            "page_count": 0
-        }
+    async def _process_single_document(self, doc_path: Path) -> ProcessedDocument:
+        """Process a single document with multi-modal extraction."""
+        
+        # Generate unique document ID
+        doc_id = hashlib.md5(str(doc_path).encode()).hexdigest()[:12]
+        
+        # Determine document type and process accordingly
+        suffix = doc_path.suffix.lower()
+        
+        if suffix == '.pdf':
+            content, tables, images = await self._process_pdf(doc_path)
+        elif suffix in ['.docx', '.doc']:
+            content, tables, images = await self._process_docx(doc_path)
+        elif suffix == '.txt':
+            content, tables, images = await self._process_text(doc_path)
+        elif suffix in ['.xlsx', '.xls']:
+            content, tables, images = await self._process_excel(doc_path)
+        else:
+            raise ValueError(f"Unsupported document format: {suffix}")
+        
+        # Create text chunks
+        chunks = self.text_splitter.create_documents(
+            texts=[content],
+            metadatas=[{
+                "source": str(doc_path),
+                "document_id": doc_id,
+                "chunk_type": "text"
+            }]
+        )
+        
+        # Add table chunks if present
+        for i, table in enumerate(tables):
+            table_text = table.to_string()
+            table_chunks = self.text_splitter.create_documents(
+                texts=[table_text],
+                metadatas=[{
+                    "source": str(doc_path),
+                    "document_id": doc_id,
+                    "chunk_type": "table",
+                    "table_index": i
+                }]
+            )
+            chunks.extend(table_chunks)
+        
+        # Calculate confidence score (simplified)
+        confidence_score = min(1.0, len(content) / 1000) if content else 0.0
+        
+        return ProcessedDocument(
+            document_id=doc_id,
+            source_path=str(doc_path),
+            content=content,
+            metadata={
+                "file_size": doc_path.stat().st_size,
+                "file_type": suffix,
+                "num_tables": len(tables),
+                "num_images": len(images)
+            },
+            chunks=chunks,
+            tables=tables,
+            images=images,
+            processing_timestamp=datetime.now(),
+            confidence_score=confidence_score
+        )
+    
+    async def _process_pdf(self, pdf_path: Path) -> tuple[str, List[pd.DataFrame], List[Dict[str, Any]]]:
+        """Process PDF document with multi-modal extraction."""
+        content_parts = []
+        tables = []
+        images = []
         
         try:
-            # Use pdfplumber for text and table extraction
-            with pdfplumber.open(file_path) as pdf:
-                content_data["page_count"] = len(pdf.pages)
-                all_text = []
-                
-                for page in pdf.pages:
-                    # Extract text
-                    page_text = page.extract_text()
-                    if page_text:
-                        all_text.append(page_text)
-                    
-                    # Check for tables
-                    tables = page.extract_tables()
-                    if tables:
-                        content_data["has_tables"] = True
-                        # Convert tables to text format
-                        for table in tables:
-                            table_text = "\n".join(["\t".join(row) for row in table if row])
-                            all_text.append(f"\n[TABLE]\n{table_text}\n[/TABLE]\n")
-                
-                content_data["text"] = "\n\n".join(all_text)
+            if self.doc_config.pdf_parser == "pdfplumber":
+                # Use pdfplumber for text and table extraction
+                with pdfplumber.open(pdf_path) as pdf:
+                    for page_num, page in enumerate(pdf.pages):
+                        # Extract text
+                        page_text = page.extract_text()
+                        if page_text:
+                            content_parts.append(page_text)
+                        
+                        # Extract tables if enabled
+                        if self.doc_config.extract_tables:
+                            page_tables = page.extract_tables()
+                            for table_data in page_tables:
+                                if table_data:
+                                    df = pd.DataFrame(table_data[1:], columns=table_data[0])
+                                    tables.append(df)
             
-            # Use PyMuPDF for image extraction
-            doc = fitz.open(file_path)
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                image_list = page.get_images()
-                if image_list:
-                    content_data["has_images"] = True
-                    break  # We just need to know if images exist
-            
-            doc.close()
-            
+            # Use PyMuPDF for image extraction if enabled
+            if self.doc_config.extract_images:
+                doc = fitz.open(pdf_path)
+                for page_num, page in enumerate(doc):
+                    image_list = page.get_images()
+                    for img_index, img in enumerate(image_list):
+                        images.append({
+                            "page": page_num,
+                            "index": img_index,
+                            "xref": img[0]
+                        })
+                doc.close()
+        
         except Exception as e:
-            self.logger.error("PDF processing failed", file_path=str(file_path), error=str(e))
-            raise DocumentProcessingError(f"PDF processing failed: {e}")
-        
-        return content_data
+            logger.error(f"Error processing PDF {pdf_path}: {e}")
+            
+        content = "\n\n".join(content_parts)
+        return content, tables, images
     
-    async def _process_docx(self, file_path: Path) -> Dict[str, Any]:
-        """Process DOCX document and extract text and tables."""
-        content_data = {
-            "text": "",
-            "has_tables": False,
-            "has_images": False,
-            "page_count": None  # Not easily available for DOCX
-        }
+    async def _process_docx(self, docx_path: Path) -> tuple[str, List[pd.DataFrame], List[Dict[str, Any]]]:
+        """Process DOCX document."""
+        content_parts = []
+        tables = []
+        images = []
         
         try:
-            doc = DocxDocument(file_path)
-            all_text = []
+            doc = DocxDocument(docx_path)
             
-            # Extract paragraphs
+            # Extract text from paragraphs
             for paragraph in doc.paragraphs:
                 if paragraph.text.strip():
-                    all_text.append(paragraph.text)
+                    content_parts.append(paragraph.text)
             
-            # Extract tables
-            if doc.tables:
-                content_data["has_tables"] = True
+            # Extract tables if enabled
+            if self.doc_config.extract_tables:
                 for table in doc.tables:
-                    table_text = []
+                    data = []
                     for row in table.rows:
-                        row_text = "\t".join([cell.text for cell in row.cells])
-                        table_text.append(row_text)
-                    all_text.append(f"\n[TABLE]\n{chr(10).join(table_text)}\n[/TABLE]\n")
-            
-            # Check for images (inline shapes)
-            if doc.inline_shapes:
-                content_data["has_images"] = True
-            
-            content_data["text"] = "\n\n".join(all_text)
-            
-        except Exception as e:
-            self.logger.error("DOCX processing failed", file_path=str(file_path), error=str(e))
-            raise DocumentProcessingError(f"DOCX processing failed: {e}")
+                        row_data = [cell.text for cell in row.cells]
+                        data.append(row_data)
+                    
+                    if data:
+                        df = pd.DataFrame(data[1:], columns=data[0] if len(data) > 1 else None)
+                        tables.append(df)
         
-        return content_data
+        except Exception as e:
+            logger.error(f"Error processing DOCX {docx_path}: {e}")
+        
+        content = "\n\n".join(content_parts)
+        return content, tables, images
     
-    async def _process_txt(self, file_path: Path) -> Dict[str, Any]:
+    async def _process_text(self, text_path: Path) -> tuple[str, List[pd.DataFrame], List[Dict[str, Any]]]:
         """Process plain text document."""
-        content_data = {
-            "text": "",
-            "has_tables": False,
-            "has_images": False,
-            "page_count": None
-        }
-        
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content_data["text"] = f.read()
+            with open(text_path, 'r', encoding='utf-8') as file:
+                content = file.read()
         except Exception as e:
-            self.logger.error("TXT processing failed", file_path=str(file_path), error=str(e))
-            raise DocumentProcessingError(f"TXT processing failed: {e}")
+            logger.error(f"Error processing text file {text_path}: {e}")
+            content = ""
         
-        return content_data
+        return content, [], []  # No tables or images in plain text
     
-    async def _add_to_vector_store(self, text: str, metadata: DocumentMetadata) -> None:
-        """Add document content to vector store."""
+    async def _process_excel(self, excel_path: Path) -> tuple[str, List[pd.DataFrame], List[Dict[str, Any]]]:
+        """Process Excel file extracting all sheets as tables."""
+        tables = []
         try:
-            # Create text chunks
-            chunks = self.text_splitter.split_text(text)
-            
-            # Create Document objects with metadata
-            documents = []
-            for i, chunk in enumerate(chunks):
-                doc_metadata = {
-                    "source": str(metadata.file_path),
-                    "document_type": metadata.document_type.value,
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                    "file_size": metadata.file_size,
-                    "has_tables": metadata.has_tables,
-                    "has_images": metadata.has_images,
-                    "processed_at": metadata.processed_at.isoformat() if metadata.processed_at else None
-                }
-                
-                documents.append(Document(
-                    page_content=chunk,
-                    metadata=doc_metadata
-                ))
-            
-            # Add to vector store
-            await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: self.vector_store.add_documents(documents)
-            )
-            
-            self.logger.info("Document added to vector store", 
-                           file_path=str(metadata.file_path),
-                           chunk_count=len(chunks))
-            
+            xls = pd.ExcelFile(excel_path)
+            for sheet in xls.sheet_names:
+                df = pd.read_excel(excel_path, sheet_name=sheet)
+                tables.append(df)
         except Exception as e:
-            self.logger.error("Failed to add document to vector store", 
-                            file_path=str(metadata.file_path), 
-                            error=str(e))
-            raise DocumentProcessingError(f"Vector store addition failed: {e}")
+            logger.error(f"Error processing Excel {excel_path}: {e}")
+        # Convert tables to text content
+        content = "\n\n".join(df.to_string(index=False) for df in tables)
+        return content, tables, []
     
-    def _calculate_content_hash(self, content: str) -> str:
-        """Calculate SHA-256 hash of content for change detection."""
-        return hashlib.sha256(content.encode('utf-8')).hexdigest()
-    
-    async def search_documents(self, query: str, top_k: Optional[int] = None) -> List[Document]:
+    async def search_documents(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None
+    ) -> List[Document]:
         """
-        Search documents in the vector store.
+        Search processed documents using semantic similarity.
         
         Args:
             query: Search query
-            top_k: Number of results to return (defaults to config value)
+            top_k: Number of top results to return
+            filter_metadata: Optional metadata filters
             
         Returns:
             List of relevant document chunks
         """
-        if top_k is None:
-            top_k = self.config.vector_store.top_k
+        if not self.vector_store:
+            raise RuntimeError("Vector store not initialized")
         
         try:
             # Perform similarity search
-            results = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.vector_store.similarity_search(
-                    query, 
-                    k=top_k
-                )
+            results = self.vector_store.similarity_search(
+                query=query,
+                k=top_k,
+                filter=filter_metadata
             )
             
-            self.logger.info("Document search completed", 
-                           query=query, 
-                           results_count=len(results))
-            
+            logger.info(f"Found {len(results)} relevant documents for query: {query[:50]}...")
             return results
             
         except Exception as e:
-            self.logger.error("Document search failed", query=query, error=str(e))
-            raise DocumentProcessingError(f"Search failed: {e}")
+            logger.error(f"Document search failed: {e}")
+            raise
     
-    async def process_document_batch(self, file_paths: List[Path]) -> List[DocumentMetadata]:
-        """
-        Process multiple documents concurrently.
+    async def get_collection_stats(self) -> Dict[str, Any]:
+        """Get statistics about the processed document collection."""
+        if not self.vector_store:
+            return {"error": "Vector store not initialized"}
         
-        Args:
-            file_paths: List of document paths to process
-            
-        Returns:
-            List of document metadata for successfully processed documents
-        """
-        self.logger.info("Starting batch document processing", 
-                        document_count=len(file_paths))
-        
-        # Process documents concurrently
-        tasks = [self.process_document(path) for path in file_paths]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Separate successful results from errors
-        successful_metadata = []
-        for i, result in enumerate(results):
-            if isinstance(result, DocumentMetadata):
-                successful_metadata.append(result)
-            else:
-                self.logger.error("Batch processing error", 
-                                file_path=str(file_paths[i]), 
-                                error=str(result))
-        
-        self.logger.info("Batch processing completed", 
-                        total_documents=len(file_paths),
-                        successful=len(successful_metadata),
-                        failed=len(file_paths) - len(successful_metadata))
-        
-        return successful_metadata
-    
-    async def _log_audit_entry(self, action: str, details: Dict[str, Any]) -> None:
-        """Log audit entry for document processing actions."""
-        if not self.config.agent_coordination.audit_enabled:
-            return
-        
-        audit_entry = AuditEntry(
-            entry_id=f"doc_{datetime.now().timestamp()}",
-            agent_type=self.agent_type,
-            action=action,
-            details=details
-        )
-        
-        # Write to audit log file
         try:
-            with open(self.config.agent_coordination.audit_log_path, 'a') as f:
-                f.write(audit_entry.to_json() + "\n")
-        except Exception as e:
-            self.logger.error("Failed to write audit entry", error=str(e))
-    
-    def get_processing_stats(self) -> ProcessingStats:
-        """Get current processing statistics."""
-        return self.stats
-    
-    async def handle_message(self, message: AgentMessage) -> AgentMessage:
-        """
-        Handle incoming messages from other agents.
-        
-        Args:
-            message: Incoming agent message
+            # Get collection info
+            collection = self.vector_store._collection
+            count = collection.count()
             
-        Returns:
-            Response message
-        """
-        try:
-            if message.message_type == MessageType.REQUEST:
-                content = message.content
-                
-                if content.get("action") == "process_document":
-                    file_path = Path(content["file_path"])
-                    metadata = await self.process_document(file_path)
-                    
-                    return AgentMessage(
-                        sender=self.agent_type,
-                        recipient=message.sender,
-                        message_type=MessageType.RESPONSE,
-                        content={
-                            "status": "success",
-                            "metadata": metadata.to_dict()
-                        },
-                        correlation_id=message.message_id
-                    )
-                
-                elif content.get("action") == "search_documents":
-                    query = content["query"]
-                    top_k = content.get("top_k")
-                    results = await self.search_documents(query, top_k)
-                    
-                    return AgentMessage(
-                        sender=self.agent_type,
-                        recipient=message.sender,
-                        message_type=MessageType.RESPONSE,
-                        content={
-                            "status": "success",
-                            "results": [
-                                {
-                                    "content": doc.page_content,
-                                    "metadata": doc.metadata
-                                } for doc in results
-                            ]
-                        },
-                        correlation_id=message.message_id
-                    )
-                
-                elif content.get("action") == "get_stats":
-                    return AgentMessage(
-                        sender=self.agent_type,
-                        recipient=message.sender,
-                        message_type=MessageType.RESPONSE,
-                        content={
-                            "status": "success",
-                            "stats": self.stats.to_dict()
-                        },
-                        correlation_id=message.message_id
-                    )
-            
-            # Unknown action
-            return AgentMessage(
-                sender=self.agent_type,
-                recipient=message.sender,
-                message_type=MessageType.ERROR,
-                content={
-                    "error": f"Unknown action: {message.content.get('action', 'none')}"
-                },
-                correlation_id=message.message_id
-            )
+            return {
+                "total_documents": count,
+                "collection_name": collection.name,
+                "embedding_dimension": "384",  # all-MiniLM-L6-v2 dimension
+                "last_updated": datetime.now().isoformat()
+            }
             
         except Exception as e:
-            self.logger.error("Message handling failed", error=str(e))
-            return AgentMessage(
-                sender=self.agent_type,
-                recipient=message.sender,
-                message_type=MessageType.ERROR,
-                content={
-                    "error": str(e)
-                },
-                correlation_id=message.message_id
-            )
+            logger.error(f"Failed to get collection stats: {e}")
+            return {"error": str(e)}
+    
+    async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main processing method for the Document Collection Agent.
+        
+        Args:
+            input_data: Should contain 'document_paths' and optional 'collection_name'
+            
+        Returns:
+            Processing results
+        """
+        document_paths = input_data.get("document_paths")
+        collection_name = input_data.get("collection_name", "financial_documents")
+        
+        if not document_paths:
+            raise ValueError("document_paths is required in input_data")
+        
+        result = await self.process_document_collection(document_paths, collection_name)
+        
+        return {
+            "collection_result": result,
+            "success": True,
+            "agent_id": self.agent_id
+        }

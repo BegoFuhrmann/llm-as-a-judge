@@ -1,35 +1,72 @@
-# Agentic System Requirements
-# Core Dependencies
-openai>=1.35.0
-langchain>=0.2.0
-langchain-openai>=0.1.0
-langchain-community>=0.2.0
-chromadb>=0.4.0
-pydantic>=2.0.0
+# Enhanced Agentic System Requirements
+# Specialized for academic thesis comparing RAG vs Agentic approaches
 
-# Document Processing
-pdfplumber>=0.9.0
+# Azure OpenAI Integration with Enterprise Security
+openai>=1.0.0
+azure-identity>=1.15.0
+azure-keyvault-secrets>=4.7.0
+azure-storage-blob>=12.19.0
+
+# Document Processing - Multi-modal Support
+pdfplumber>=0.7.6
 PyMuPDF>=1.23.0
 python-docx>=0.8.11
 Pillow>=10.0.0
+python-magic>=0.4.27
 
-# Data Processing & Analysis
-pandas>=2.0.0
-numpy>=1.24.0
+# LangChain Ecosystem for Agent Framework
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+langchain-experimental>=0.0.5
+langsmith>=0.0.70
 
-# Async & Concurrency
-asyncio-throttle>=1.0.2
-aiofiles>=23.0.0
+# Vector Database and Semantic Search
+chromadb>=0.4.18
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4
 
-# Logging & Monitoring
-structlog>=23.0.0
-rich>=13.0.0
+# Financial Domain NLP
+spacy>=3.7.0
+transformers>=4.30.0
+datasets>=2.14.0
 
-# Testing
+# Agent Orchestration and State Management
+pydantic>=2.0.0
+fsm-tools>=0.2.0
+asyncio
+aiohttp>=3.8.0
+
+# Data Processing for Financial Documents
+pandas>=1.5.0
+numpy>=1.21.0
+scipy>=1.7.0
+openpyxl>=3.1.0
+
+# Regulatory Compliance and Audit
+structlog>=23.1.0
+prometheus-client>=0.17.0
+cryptography>=41.0.0
+
+# Configuration and Environment Management
+python-dotenv>=1.0.0
+pydantic-settings>=2.0.0
+click>=8.1.0
+
+# Academic Evaluation Integration
+# Compatible with existing evaluation framework
+jinja2>=3.1.2
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Development and Testing
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
-pytest-mock>=3.10.0
+pytest-mock>=3.11.0
+black>=22.0.0
+mypy>=0.991
+coverage>=7.0.0
 
-# Type Checking
-mypy>=1.0.0
-types-requests>=2.31.0
+# Optional: Advanced NLP for Financial Entity Recognition
+spacy-transformers>=1.2.5
+# spacy-lookups-data>=1.0.5
