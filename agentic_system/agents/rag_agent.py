@@ -19,10 +19,24 @@ from langchain.chains import RetrievalQA
 from langchain.tools import Tool
 from dotenv import load_dotenv
 
-from ..core.base import BaseAgent, Task, AgentResponse
-from ..enums import AgentType, LogLevel
-from ..audit.audit_log import audit_logger
-from .topic_identification_agent import TopicIdentificationAgent
+# Handle imports for both module and direct execution
+try:
+    # Try relative imports first (when used as a module)
+    from ..core.base import BaseAgent, Task, AgentResponse
+    from ..enums import AgentType, LogLevel, Priority
+    from ..audit.audit_log import audit_logger
+    from .topic_identification_agent import TopicIdentificationAgent
+except ImportError:
+    # Fallback to absolute imports (when run directly)
+    import sys
+    from pathlib import Path
+    current_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(current_dir))
+    
+    from core.base import BaseAgent, Task, AgentResponse
+    from enums import AgentType, LogLevel, Priority
+    from audit.audit_log import audit_logger
+    from agents.topic_identification_agent import TopicIdentificationAgent
 
 
 class RAGAgent(BaseAgent):
@@ -554,10 +568,11 @@ class RAGAgent(BaseAgent):
         try:
             # Create a task for topic identification
             topic_task = Task(
-                task_id=f"topic_id_{int(time.time())}",
+                id=f"topic_id_{int(time.time())}",
+                name="Topic Identification",
+                description="Identify topics and database routing for query",
                 input_data={'query': query},
-                agent_type=AgentType.TOPIC_IDENTIFICATION,
-                priority='medium'
+                priority=Priority.MEDIUM
             )
             
             # Process the task with topic identification agent

@@ -7,7 +7,18 @@ from typing import Any, Dict, List, Optional, Union
 from datetime import datetime
 import uuid
 
-from ..enums import AgentType, TaskStatus, Priority, LogLevel
+# Handle imports for both module and direct execution
+try:
+    # Try relative imports first (when used as a module)
+    from ..enums import AgentType, TaskStatus, Priority, LogLevel
+except ImportError:
+    # Fallback to absolute imports (when run directly)
+    import sys
+    from pathlib import Path
+    current_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(current_dir))
+    
+    from enums import AgentType, TaskStatus, Priority, LogLevel
 
 
 @dataclass

@@ -9,9 +9,22 @@ from datetime import datetime
 import openai
 from openai import AsyncAzureOpenAI
 
-from ..core.base import BaseAgent, Task, AgentResponse
-from ..enums import AgentType, LogLevel
-from ..audit.audit_log import audit_logger
+# Handle imports for both module and direct execution
+try:
+    # Try relative imports first (when used as a module)
+    from ..core.base import BaseAgent, Task, AgentResponse
+    from ..enums import AgentType, LogLevel
+    from ..audit.audit_log import audit_logger
+except ImportError:
+    # Fallback to absolute imports (when run directly)
+    import sys
+    from pathlib import Path
+    current_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(current_dir))
+    
+    from core.base import BaseAgent, Task, AgentResponse
+    from enums import AgentType, LogLevel
+    from audit.audit_log import audit_logger
 
 
 class TopicIdentificationAgent(BaseAgent):
@@ -104,7 +117,7 @@ class TopicIdentificationAgent(BaseAgent):
     async def _test_connection(self):
         """Test the Azure OpenAI connection."""
         response = await self.client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4"),
+            model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4o-mini"),
             messages=[{"role": "user", "content": "Test connection"}],
             max_tokens=10
         )
@@ -188,7 +201,7 @@ class TopicIdentificationAgent(BaseAgent):
             )
             
             response = await self.client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4"),
+                model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": "You are an expert topic identification system."},
                     {"role": "user", "content": prompt}

@@ -10,8 +10,19 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import uuid
 
-from ..enums import AgentType, LogLevel, ComplianceLevel
-from ..core.base import Task, AgentResponse
+# Handle imports for both module and direct execution
+try:
+    # Try relative imports first (when used as a module)
+    from ..enums import AgentType, LogLevel, ComplianceLevel
+    from ..core.base import Task, AgentResponse
+except ImportError:
+    # Fallback to absolute imports (when run directly)
+    import sys
+    current_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(current_dir))
+    
+    from enums import AgentType, LogLevel, ComplianceLevel
+    from core.base import Task, AgentResponse
 
 
 @dataclass

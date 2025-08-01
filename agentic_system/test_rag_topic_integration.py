@@ -6,13 +6,25 @@ import sys
 import os
 from pathlib import Path
 
-# Add the agentic_system to Python path
-sys.path.append(str(Path(__file__).parent))
+# Add the current directory and parent directory to Python path
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
 
-from agents.rag_agent import RAGAgent
-from agents.topic_identification_agent import TopicIdentificationAgent
-from core.base import Task
-from enums import AgentType
+# Import modules directly from the current directory structure
+try:
+    # Try direct imports from the current directory
+    from agents.rag_agent import RAGAgent
+    from agents.topic_identification_agent import TopicIdentificationAgent
+    from core.base import Task
+    from enums import AgentType
+except ImportError as e:
+    print(f"Import error with relative paths: {e}")
+    # Fallback: try absolute imports
+    sys.path.insert(0, str(current_dir.parent))
+    from agentic_system.agents.rag_agent import RAGAgent
+    from agentic_system.agents.topic_identification_agent import TopicIdentificationAgent
+    from agentic_system.core.base import Task
+    from agentic_system.enums import AgentType
 
 
 async def test_rag_topic_integration():
