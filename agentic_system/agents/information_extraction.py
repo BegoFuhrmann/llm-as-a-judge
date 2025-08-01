@@ -36,7 +36,7 @@ from typing import List as TypingList
 
 import os
 from dotenv import load_dotenv
-from azure.identity import ClientSecretCredential, get_bearer_token_provider
+from azure.identity import ClientSecretCredential, get_bearer_token_provider, DefaultAzureCredential
 # Azure integration
 
 from ..core.agentic_config import AgenticConfig
