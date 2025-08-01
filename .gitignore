@@ -8,3 +8,9 @@
 Thumbs.db
 
 .env
+
+# ignore pycache
+__pycache__/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
