@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import openai
 from openai import AsyncAzureOpenAI
+from azure.identity import DefaultAzureCredential
 
 # Handle imports for both module and direct execution
 try:
@@ -44,11 +45,12 @@ class TopicIdentificationAgent(BaseAgent):
         # Topic classification prompts
         self.classification_prompt = """
         You are an expert topic identification system for a corporate knowledge management system. 
-        Analyze the given query and provide detailed classification to route it to the appropriate knowledge database.
+        Analyze the given query and provide detailed classification to route it to the appropriate knowledge database or agent.
         
-        We have two main knowledge databases:
-        1. CONFLUENCE: Contains project documentation, technical information, RPA/AI projects, development processes, BAIA, BegoChat
-        2. NEWHQ: Contains office facility information, building details, parking, workplace amenities, headquarters information
+        We have three main knowledge sources/agents:
+        1. CONFLUENCE: Contains project documentation, technical information, RPA/AI projects, development processes, BAIA, BegoChat. Best for internal, structured data.
+        2. NEWHQ: Contains office facility information, building details, parking, workplace amenities, headquarters information. Best for internal, facilities-related data.
+        3. AUTONOMOUS_AGENT (Web Search): Can search the public internet for general knowledge, current events, or information not available internally.
         
         Analyze this query: "{query}"
         
@@ -58,8 +60,8 @@ class TopicIdentificationAgent(BaseAgent):
         3. Complexity level (simple, moderate, complex)
         4. Required capabilities (rag_search, web_search, computation, compliance_verification)
         5. Confidence score (0.0 to 1.0)
-        6. Database recommendation (confluence, newhq, both, unclear)
-        7. Domain classification (technical, business, compliance, facilities, office, general)
+        6. Database/Agent recommendation (confluence, newhq, autonomous_agent, or a combination)
+        7. Domain classification (technical, business, compliance, facilities, office, general, web_search)
         
         Respond in JSON format:
         {{
@@ -68,7 +70,7 @@ class TopicIdentificationAgent(BaseAgent):
             "complexity": "complexity_level",
             "capabilities_needed": ["capability1", "capability2", ...],
             "confidence": 0.95,
-            "database_recommendation": "confluence|newhq|both|unclear",
+            "database_recommendation": "confluence|newhq|autonomous_agent|unclear",
             "routing_strategy": "strategy_description",
             "metadata": {{
                 "domain": "identified_domain",
@@ -76,7 +78,8 @@ class TopicIdentificationAgent(BaseAgent):
                 "estimated_processing_time": "time_estimate",
                 "topic_scores": {{
                     "confluence_relevance": 0.0-1.0,
-                    "newhq_relevance": 0.0-1.0
+                    "newhq_relevance": 0.0-1.0,
+                    "web_search_relevance": 0.0-1.0
                 }}
             }}
         }}
@@ -90,10 +93,24 @@ class TopicIdentificationAgent(BaseAgent):
             
             load_dotenv()
             
+            # Load all required environment variables
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+            
+            default_credential = DefaultAzureCredential()
+            token = default_credential.get_token("https://cognitiveservices.azure.com/.default")
+            
+            # Set token to environment variable
+            os.environ["AZURE_OPENAI_API_KEY"] = token.token
+            
+            # Ensure essential variables are present
+            if not all([azure_endpoint, os.environ["AZURE_OPENAI_API_KEY"]]):
+                raise ValueError("Missing required Azure OpenAI environment variables.")
+
             self.client = AsyncAzureOpenAI(
-                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
+                api_key=os.environ["AZURE_OPENAI_API_KEY"],
+                api_version=api_version,
+                azure_endpoint=azure_endpoint
             )
             
             # Test the connection
