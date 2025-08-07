@@ -15,8 +15,8 @@ os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 sys.path.append('.')
 
 try:
-    from rag_agentic_evaluation import EvalConfig, SystemType
-    from rag_agentic_evaluation.llm_client import create_openai_client, get_model_name, test_llm_connection
+    from evaluation_system import EvalConfig, SystemType
+    from evaluation_system.llm_client import create_openai_client, get_model_name, test_llm_connection
     
     print("✅ Successfully imported evaluation framework")
     

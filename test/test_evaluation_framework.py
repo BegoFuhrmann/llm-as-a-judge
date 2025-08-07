@@ -13,7 +13,7 @@ import os
 from typing import List
 
 # Import from the modular package
-from rag_agentic_evaluation import (
+from evaluation_system import (
     EvalConfig,
     EvaluationDimension,
     SystemType,
@@ -26,10 +26,10 @@ from rag_agentic_evaluation import (
     setup_logging,
     batch_evaluate_from_file
 )
-from rag_agentic_evaluation.templates import load_system_prompt
-from rag_agentic_evaluation.llm_client import validate_evaluation_response, calculate_weighted_score
-from rag_agentic_evaluation.utils import load_json_file, save_json_file, safe_divide, truncate_text
-from rag_agentic_evaluation.report import generate_detailed_evaluation_report, generate_csv_export, generate_json_export
+from evaluation_system.templates import load_system_prompt
+from evaluation_system.llm_client import validate_evaluation_response, calculate_weighted_score
+from evaluation_system.utils import load_json_file, save_json_file, safe_divide, truncate_text
+from evaluation_system.report import generate_detailed_evaluation_report, generate_csv_export, generate_json_export
 
 # Sample test data
 SAMPLE_QUERY = """

@@ -6,10 +6,10 @@ This script validates all components of the citation-aware evaluation system.
 
 import json
 from typing import List
-from rag_agentic_evaluation.colab_config import create_colab_evaluation_config
-from rag_agentic_evaluation.evaluation import _detect_explicit_citations, _calculate_content_grounding, _calculate_citation_accuracy
-from rag_agentic_evaluation.models import SourceSnippet, EvaluationInput
-from rag_agentic_evaluation.enums import SystemType, EvaluationDimension
+from evaluation_system.colab_config import create_colab_evaluation_config
+from evaluation_system.evaluation import _detect_explicit_citations, _calculate_content_grounding, _calculate_citation_accuracy
+from evaluation_system.models import SourceSnippet, EvaluationInput
+from evaluation_system.enums import SystemType, EvaluationDimension
 
 
 def test_citation_detection():

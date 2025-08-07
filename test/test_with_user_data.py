@@ -32,18 +32,18 @@ load_env_file()
 # Add the package to the path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from rag_agentic_evaluation.config import setup_logging
-from rag_agentic_evaluation.excel_processor import (
+from evaluation_system.config import setup_logging
+from evaluation_system.excel_processor import (
     load_excel_with_snippets,
     validate_excel_structure
 )
-from rag_agentic_evaluation.utils import (
+from evaluation_system.utils import (
     parse_snippets_from_text,
     calculate_snippet_grounding_score
 )
-from rag_agentic_evaluation.evaluation import evaluate_answers_with_snippets
-from rag_agentic_evaluation.config import EvalConfig
-from rag_agentic_evaluation.llm_client import create_openai_client
+from evaluation_system.evaluation import evaluate_answers_with_snippets
+from evaluation_system.config import EvalConfig
+from evaluation_system.llm_client import create_openai_client
 
 # Set up logging
 logger = setup_logging(log_level=logging.INFO)

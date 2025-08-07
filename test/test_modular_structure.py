@@ -4,7 +4,7 @@ Simple test to verify the modular structure and imports work correctly.
 
 try:
     # Test imports from the package
-    from rag_agentic_evaluation import (
+    from evaluation_system import (
         EvalConfig, 
         SystemType, 
         EvaluationDimension,

@@ -15,7 +15,7 @@ os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 sys.path.append('.')
 
 try:
-    from rag_agentic_evaluation import EvalConfig, SystemType, evaluate_answers
+    from evaluation_system import EvalConfig, SystemType, evaluate_answers
     
     print("✅ Successfully imported evaluation framework")
     
@@ -27,7 +27,7 @@ try:
     print(f"   Rubrics keys: {list(config.rubrics.keys())}")
     
     # Test template loading
-    from rag_agentic_evaluation.templates import load_system_prompt
+    from evaluation_system.templates import load_system_prompt
     try:
         prompt = load_system_prompt(config.system_prompt_template, config)
         print(f"✅ Template loaded successfully (length: {len(prompt)} chars)")

@@ -12,17 +12,17 @@ from pathlib import Path
 # Add the package to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from rag_agentic_evaluation.excel_processor import (
+from evaluation_system.excel_processor import (
     load_excel_with_snippets, 
     validate_excel_structure, 
     create_sample_excel,
     export_evaluation_results_to_excel
 )
-from rag_agentic_evaluation.evaluation import evaluate_answers_with_snippets
-from rag_agentic_evaluation.config import EvalConfig
-from rag_agentic_evaluation.utils import parse_snippets_from_text, calculate_snippet_grounding_score
-from rag_agentic_evaluation.models import SourceSnippet
-from rag_agentic_evaluation.enums import SystemType
+from evaluation_system.evaluation import evaluate_answers_with_snippets
+from evaluation_system.config import EvalConfig
+from evaluation_system.utils import parse_snippets_from_text, calculate_snippet_grounding_score
+from evaluation_system.models import SourceSnippet
+from evaluation_system.enums import SystemType
 import logging
 
 # Setup logging

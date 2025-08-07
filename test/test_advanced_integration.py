@@ -10,14 +10,14 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
-from rag_agentic_evaluation.advanced_config import (
+from evaluation_system.advanced_config import (
     AdvancedEvalConfig,
     ConfigurationProfile,
     SemanticSimilarityMethod
 )
-from rag_agentic_evaluation.semantic_similarity import SemanticSimilarityCalculator
-from rag_agentic_evaluation.models import SourceSnippet
-from rag_agentic_evaluation.utils import calculate_snippet_grounding_score
+from evaluation_system.semantic_similarity import SemanticSimilarityCalculator
+from evaluation_system.models import SourceSnippet
+from evaluation_system.utils import calculate_snippet_grounding_score
 
 
 class TestAdvancedConfigurationIntegration:
