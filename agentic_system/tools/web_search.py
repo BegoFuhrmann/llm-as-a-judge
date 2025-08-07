@@ -1,19 +1,24 @@
 """
-Web Search Tool - Provides external knowledge acquisition through DuckDuckGo search.
+Web Search Tool - Provides external knowledge acquisition through Tavily search.
 """
 import asyncio
 import time
+import os
+import ssl
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 import json
 import re
 from dataclasses import dataclass, field
+import dotenv
 
-# Web search and scraping
+# Load environment variables from the project root
+dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
+# Web search
 import aiohttp
 import requests
-from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+from langchain_tavily import TavilySearch
 
 # Handle imports for both module and direct execution
 try:
@@ -48,22 +53,28 @@ class SearchResult:
 
 @dataclass
 class SearchQuery:
-    """Represents a search query with configuration."""
+    """Represents a search query with configuration for Tavily."""
     query: str = ""
     max_results: int = 5
     search_scope: SearchScope = SearchScope.WEB_SEARCH
     filters: Dict[str, Any] = field(default_factory=dict)
-    language: str = "en"
-    region: str = "us-en"
-    safe_search: str = "moderate"
+    topic: str = "general"  # "general", "news", or "finance"
+    include_answer: bool = False
+    include_raw_content: bool = True
+    include_images: bool = False
+    include_image_descriptions: bool = False
+    search_depth: str = "basic"  # "basic" or "advanced"
+    time_range: Optional[str] = None  # "day", "week", "month", or "year"
+    include_domains: Optional[List[str]] = None
+    exclude_domains: Optional[List[str]] = None
 
 
 class WebSearchTool:
     """
-    Advanced web search tool using DuckDuckGo for external knowledge acquisition.
+    Advanced web search tool using Tavily for external knowledge acquisition.
     
     Features:
-    - Async search capabilities
+    - Async search capabilities with Tavily API
     - Content extraction and cleaning
     - Rate limiting and error handling
     - Result ranking and filtering
@@ -84,8 +95,8 @@ class WebSearchTool:
         self.min_content_length = self.config.get('min_content_length', 100)
         self.content_quality_threshold = self.config.get('content_quality_threshold', 0.5)
         
-        # Search client
-        self.ddgs = DDGS()
+        # Initialize Tavily search client
+        self.tavily_search = self._create_tavily_client()
         
         # Rate limiting
         self._last_search_time = 0
@@ -95,6 +106,42 @@ class WebSearchTool:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        
+        # Load environment variables
+        self._load_environment_config()
+        
+    def _create_tavily_client(self):
+        """Create Tavily search client."""
+        try:
+            # Verify API key is available
+            api_key = os.getenv('TAVILY_API_KEY')
+            if not api_key:
+                print("Warning: TAVILY_API_KEY not found in environment variables.")
+                print("Please add your Tavily API key to your .env file.")
+                print("You can get an API key from: https://tavily.com/")
+                return None
+                
+            # Create Tavily search tool with default settings
+            return TavilySearch(
+                max_results=self.max_results_per_query,
+                topic="general",
+                include_answer=False,
+                include_raw_content=True,
+                include_images=False,
+                include_image_descriptions=False,
+                search_depth="basic"
+            )
+        except Exception as e:
+            print(f"Warning: Failed to initialize Tavily search client: {e}")
+            return None
+        
+    def _load_environment_config(self):
+        """Load environment configuration."""
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass  # dotenv not available, skip
         
     async def search(self, query: Union[str, SearchQuery]) -> List[SearchResult]:
         """
@@ -163,55 +210,100 @@ class WebSearchTool:
             raise
     
     async def _perform_search(self, search_query: SearchQuery) -> List[Dict[str, Any]]:
-        """Perform the actual DuckDuckGo search."""
+        """Perform the actual Tavily search."""
         try:
-            # Use DuckDuckGo search with list output format
-            search_results = self.ddgs.text(
-                keywords=search_query.query,
-                region=search_query.region,
-                safesearch=search_query.safe_search,
-                max_results=min(search_query.max_results, self.max_results_per_query)
-            )
+            # Check if Tavily client is available
+            if self.tavily_search is None:
+                await audit_logger.log_agent_action(
+                    agent_id="web_search_tool",
+                    agent_type=AgentType.AUTONOMOUS,
+                    action="tavily_unavailable",
+                    log_level=LogLevel.WARNING,
+                    query=search_query.query,
+                    message="Tavily search client not available, returning mock results"
+                )
+                
+                # Return mock results when Tavily is unavailable
+                return [{
+                    'title': f"Search Results for: {search_query.query}",
+                    'url': "https://example.com/search-unavailable",
+                    'content': f"Tavily search is not configured. Please add your TAVILY_API_KEY to the .env file. Query was: '{search_query.query}'",
+                    'score': 0.5
+                }]
             
-            # Convert generator to list
-            return list(search_results)
+            # Update Tavily search configuration based on query parameters
+            tavily_config = {
+                'max_results': min(search_query.max_results, self.max_results_per_query),
+                'topic': search_query.topic,
+                'include_answer': search_query.include_answer,
+                'include_raw_content': search_query.include_raw_content,
+                'include_images': search_query.include_images,
+                'include_image_descriptions': search_query.include_image_descriptions,
+                'search_depth': search_query.search_depth,
+            }
+            
+            # Add optional parameters if specified
+            if search_query.time_range:
+                tavily_config['time_range'] = search_query.time_range
+            if search_query.include_domains:
+                tavily_config['include_domains'] = search_query.include_domains
+            if search_query.exclude_domains:
+                tavily_config['exclude_domains'] = search_query.exclude_domains
+            
+            # Create a new TavilySearch instance with updated configuration
+            tavily_search = TavilySearch(**tavily_config)
+            
+            # Perform the search using Tavily's invoke method
+            search_results = tavily_search.invoke({"query": search_query.query})
+            
+            # Parse the JSON response if it's a string
+            if isinstance(search_results, str):
+                search_results = json.loads(search_results)
+            
+            # Extract results from Tavily response format
+            if isinstance(search_results, dict) and 'results' in search_results:
+                return search_results['results']
+            else:
+                return []
             
         except Exception as e:
-            # Audit log DuckDuckGo search error
+            # Audit log Tavily search error
             await audit_logger.log_agent_action(
                 agent_id="web_search_tool",
                 agent_type=AgentType.AUTONOMOUS,
-                action="ddg_search_error",
+                action="tavily_search_error",
                 log_level=LogLevel.ERROR,
                 query=search_query.query,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return []
     
     async def _process_search_results(self, raw_results: List[Dict[str, Any]], 
                                      search_query: SearchQuery) -> List[SearchResult]:
-        """Process raw search results and extract content."""
+        """Process raw search results from Tavily."""
         processed_results = []
         
         for result in raw_results:
             try:
-                # Create base SearchResult
+                # Create base SearchResult from Tavily result format
                 search_result = SearchResult(
                     title=result.get('title', ''),
-                    url=result.get('href', ''),
-                    snippet=result.get('body', ''),
+                    url=result.get('url', ''),
+                    snippet=result.get('content', ''),
+                    content=result.get('raw_content', '') or result.get('content', ''),
                     metadata={
                         'raw_result': result,
-                        'search_query': search_query.query
+                        'search_query': search_query.query,
+                        'score': result.get('score', 0.0)
                     }
                 )
                 
-                # Extract full content if enabled
-                if self.extract_full_content and search_result.url:
-                    content = await self._extract_webpage_content(search_result.url)
-                    search_result.content = content
-                    
-                    # Calculate relevance score
+                # Use Tavily's score as relevance score if available
+                search_result.relevance_score = result.get('score', 0.0)
+                
+                # If no score provided, calculate our own
+                if search_result.relevance_score == 0.0:
                     search_result.relevance_score = self._calculate_relevance_score(
                         search_result, search_query.query
                     )
@@ -228,71 +320,12 @@ class WebSearchTool:
                     agent_type=AgentType.AUTONOMOUS,
                     action="result_processing_error",
                     log_level=LogLevel.WARNING,
-                    url=result.get('href', 'unknown'),
+                    url=result.get('url', 'unknown'),
                     error=str(e)
                 )
                 continue
         
         return processed_results
-    
-    async def _extract_webpage_content(self, url: str) -> str:
-        """Extract clean text content from a webpage."""
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout_seconds)) as session:
-                async with session.get(url, headers=self.headers) as response:
-                    if response.status == 200:
-                        html_content = await response.text()
-                        return self._clean_html_content(html_content)
-                    else:
-                        return ""
-        except Exception as e:
-            # Audit log content extraction warning
-            await audit_logger.log_agent_action(
-                agent_id="web_search_tool",
-                agent_type=AgentType.AUTONOMOUS,
-                action="content_extraction_error",
-                log_level=LogLevel.WARNING,
-                url=url,
-                error=str(e)
-            )
-            return ""
-    
-    def _clean_html_content(self, html_content: str) -> str:
-        """Clean and extract meaningful text from HTML."""
-        try:
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Remove script and style elements
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.decompose()
-            
-            # Get text content
-            text = soup.get_text()
-            
-            # Clean up whitespace
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk)
-            
-            # Truncate if too long
-            if len(text) > self.max_content_length:
-                text = text[:self.max_content_length] + "..."
-            
-            return text
-            
-        except Exception as e:
-            # Audit log HTML cleaning warning (fire-and-forget)
-            import asyncio
-            asyncio.create_task(
-                audit_logger.log_agent_action(
-                    agent_id="web_search_tool",
-                    agent_type=AgentType.AUTONOMOUS,
-                    action="html_cleaning_error",
-                    log_level=LogLevel.WARNING,
-                    error=str(e)
-                )
-            )
-            return ""
     
     def _calculate_relevance_score(self, result: SearchResult, query: str) -> float:
         """Calculate relevance score for a search result."""
@@ -363,11 +396,12 @@ def create_search_tool(config: Dict[str, Any] = None) -> WebSearchTool:
 if __name__ == "__main__":
     async def test_search():
         search_tool = WebSearchTool({
-            'max_results_per_query': 5,
+            'max_results_per_query': 3,
             'extract_full_content': True,
             'rate_limit_delay': 2.0
         })
         
+        # Test basic search
         query = "Azure OpenAI best practices"
         results = await search_tool.search(query)
         
@@ -378,6 +412,20 @@ if __name__ == "__main__":
             print(f"   Relevance: {result.relevance_score:.2f}")
             print(f"   Content length: {len(result.content)} chars")
             print(f"   Snippet: {result.snippet[:100]}...")
+        
+        # Test advanced search with domains
+        search_query = SearchQuery(
+            query="Azure Functions deployment",
+            max_results=3,
+            include_domains=["docs.microsoft.com"],
+            topic="general",
+            search_depth="advanced"
+        )
+        
+        advanced_results = await search_tool.search(search_query)
+        print(f"\n\nAdvanced search results ({len(advanced_results)} results):")
+        for i, result in enumerate(advanced_results):
+            print(f"{i+1}. {result.title} - {result.url}")
     
     # Run test if executed directly
     asyncio.run(test_search())

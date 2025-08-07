@@ -1,0 +1,142 @@
+2025-08-07 11:26:50,507 - azure.identity._credentials.environment - INFO - Environment is configured for ClientSecretCredential
+2025-08-07 11:26:50,511 - azure.identity._credentials.managed_identity - INFO - ManagedIdentityCredential will use IMDS with client_id: 6a338223-89a9-4f48-a29c-dc24dbecbbfc
+2025-08-07 11:26:50,688 - azure.core.pipeline.policies.http_logging_policy - INFO - Request URL: 'https://login.microsoftonline.com/f8a4d521-2a2d-4e94-ab56-260dada38157/v2.0/.well-known/openid-configuration'
+Request method: 'GET'
+Request headers:
+    'User-Agent': 'azsdk-python-identity/1.21.0 Python/3.13.0 (Windows-10-10.0.19045-SP0)'
+No body was attached to the request
+2025-08-07 11:26:50,847 - azure.core.pipeline.policies.http_logging_policy - INFO - Response status: 200
+Response headers:
+    'P3P': 'REDACTED'
+    'Date': 'Thu, 07 Aug 2025 09:26:49 GMT'
+    'x-ms-srs': 'REDACTED'
+    'Connection': 'Keep-Alive'
+    'Set-Cookie': 'REDACTED'
+    'Content-Type': 'application/json; charset=utf-8'
+    'Cache-Control': 'max-age=86400, private'
+    'Content-Length': '1753'
+    'x-ms-request-id': 'abfc60b6-6721-4a37-bb65-72a7d8a71d00'
+    'x-ms-ests-server': 'REDACTED'
+    'X-XSS-Protection': 'REDACTED'
+    'X-Content-Type-Options': 'REDACTED'
+    'Restrict-Access-Context': 'REDACTED'
+    'Strict-Transport-Security': 'REDACTED'
+    'Restrict-Access-To-Tenants': 'REDACTED'
+    'Access-Control-Allow-Origin': 'REDACTED'
+    'Access-Control-Allow-Methods': 'REDACTED'
+    'Content-Security-Policy-Report-Only': 'REDACTED'
+2025-08-07 11:26:51,046 - azure.core.pipeline.policies.http_logging_policy - INFO - Request URL: 'https://login.microsoftonline.com/f8a4d521-2a2d-4e94-ab56-260dada38157/oauth2/v2.0/token'
+Request method: 'POST'
+Request headers:
+    'Accept': 'application/json'
+    'x-client-sku': 'REDACTED'
+    'x-client-ver': 'REDACTED'
+    'x-client-os': 'REDACTED'
+    'x-ms-lib-capability': 'REDACTED'
+    'client-request-id': 'REDACTED'
+    'x-client-current-telemetry': 'REDACTED'
+    'x-client-last-telemetry': 'REDACTED'
+    'User-Agent': 'azsdk-python-identity/1.21.0 Python/3.13.0 (Windows-10-10.0.19045-SP0)'
+A body is sent with the request
+2025-08-07 11:26:51,174 - azure.core.pipeline.policies.http_logging_policy - INFO - Response status: 200
+Response headers:
+    'P3P': 'REDACTED'
+    'Date': 'Thu, 07 Aug 2025 09:26:50 GMT'
+    'Pragma': 'no-cache'
+    'Expires': '-1'
+    'x-ms-srs': 'REDACTED'
+    'Connection': 'Keep-Alive'
+    'Set-Cookie': 'REDACTED'
+    'Content-Type': 'application/json; charset=utf-8'
+    'Cache-Control': 'no-store, no-cache'
+    'x-ms-clitelem': 'REDACTED'
+    'Content-Length': '1627'
+    'x-ms-request-id': '9b4077b2-ace5-4b8c-b478-f33773b50a00'
+    'x-ms-ests-server': 'REDACTED'
+    'X-XSS-Protection': 'REDACTED'
+    'client-request-id': 'REDACTED'
+    'X-Content-Type-Options': 'REDACTED'
+    'Restrict-Access-Context': 'REDACTED'
+    'Strict-Transport-Security': 'REDACTED'
+    'Restrict-Access-To-Tenants': 'REDACTED'
+    'Content-Security-Policy-Report-Only': 'REDACTED'
+2025-08-07 11:26:51,177 - azure.identity._credentials.chained - INFO - DefaultAzureCredential acquired a token from EnvironmentCredential
+2025-08-07 11:26:54,441 - AuditLogger - INFO - [rag_based] Agent azure_openai_initialized: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:05,014 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-08-07 11:27:07,175 - AuditLogger - INFO - [rag_based] Agent embeddings_initialized: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:07,235 - chromadb.telemetry.product.posthog - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-08-07 11:27:07,422 - AuditLogger - INFO - [rag_based] Agent confluence_db_loaded: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:07,431 - chromadb.telemetry.product.posthog - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-08-07 11:27:07,773 - AuditLogger - INFO - [rag_based] Agent newhq_db_loaded: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:07,782 - AuditLogger - INFO - [rag_based] Agent tools_initialized: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:09,307 - azure.core.pipeline.policies.http_logging_policy - INFO - Request URL: 'https://login.microsoftonline.com/f8a4d521-2a2d-4e94-ab56-260dada38157/v2.0/.well-known/openid-configuration'
+Request method: 'GET'
+Request headers:
+    'User-Agent': 'azsdk-python-identity/1.21.0 Python/3.13.0 (Windows-10-10.0.19045-SP0)'
+No body was attached to the request
+2025-08-07 11:27:09,537 - azure.core.pipeline.policies.http_logging_policy - INFO - Response status: 200
+Response headers:
+    'P3P': 'REDACTED'
+    'Date': 'Thu, 07 Aug 2025 09:27:09 GMT'
+    'x-ms-srs': 'REDACTED'
+    'Connection': 'Keep-Alive'
+    'Set-Cookie': 'REDACTED'
+    'Content-Type': 'application/json; charset=utf-8'
+    'Cache-Control': 'max-age=86400, private'
+    'Content-Length': '1753'
+    'x-ms-request-id': 'e5cfae51-a696-41db-9d61-89935a1b3f00'
+    'x-ms-ests-server': 'REDACTED'
+    'X-XSS-Protection': 'REDACTED'
+    'X-Content-Type-Options': 'REDACTED'
+    'Restrict-Access-Context': 'REDACTED'
+    'Strict-Transport-Security': 'REDACTED'
+    'Restrict-Access-To-Tenants': 'REDACTED'
+    'Access-Control-Allow-Origin': 'REDACTED'
+    'Access-Control-Allow-Methods': 'REDACTED'
+    'Content-Security-Policy-Report-Only': 'REDACTED'
+2025-08-07 11:27:09,540 - azure.core.pipeline.policies.http_logging_policy - INFO - Request URL: 'https://login.microsoftonline.com/f8a4d521-2a2d-4e94-ab56-260dada38157/oauth2/v2.0/token'
+Request method: 'POST'
+Request headers:
+    'Accept': 'application/json'
+    'x-client-sku': 'REDACTED'
+    'x-client-ver': 'REDACTED'
+    'x-client-os': 'REDACTED'
+    'x-ms-lib-capability': 'REDACTED'
+    'client-request-id': 'REDACTED'
+    'x-client-current-telemetry': 'REDACTED'
+    'x-client-last-telemetry': 'REDACTED'
+    'User-Agent': 'azsdk-python-identity/1.21.0 Python/3.13.0 (Windows-10-10.0.19045-SP0)'
+A body is sent with the request
+2025-08-07 11:27:09,729 - azure.core.pipeline.policies.http_logging_policy - INFO - Response status: 200
+Response headers:
+    'P3P': 'REDACTED'
+    'Date': 'Thu, 07 Aug 2025 09:27:09 GMT'
+    'Pragma': 'no-cache'
+    'Expires': '-1'
+    'x-ms-srs': 'REDACTED'
+    'Connection': 'Keep-Alive'
+    'Set-Cookie': 'REDACTED'
+    'Content-Type': 'application/json; charset=utf-8'
+    'Cache-Control': 'no-store, no-cache'
+    'x-ms-clitelem': 'REDACTED'
+    'Content-Length': '1627'
+    'x-ms-request-id': '25617725-bb63-401a-8d05-b27689143a00'
+    'x-ms-ests-server': 'REDACTED'
+    'X-XSS-Protection': 'REDACTED'
+    'client-request-id': 'REDACTED'
+    'X-Content-Type-Options': 'REDACTED'
+    'Restrict-Access-Context': 'REDACTED'
+    'Strict-Transport-Security': 'REDACTED'
+    'Restrict-Access-To-Tenants': 'REDACTED'
+    'Content-Security-Policy-Report-Only': 'REDACTED'
+2025-08-07 11:27:09,731 - azure.identity._internal.get_token_mixin - INFO - ClientSecretCredential.get_token_info succeeded
+2025-08-07 11:27:10,492 - httpx - INFO - HTTP Request: POST https://begobaiatest.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview "HTTP/1.1 200 OK"
+2025-08-07 11:27:10,501 - AuditLogger - INFO - [topic_identification] Agent initialize: interactive_rag_agent_topic_identifier | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:10,511 - AuditLogger - INFO - [rag_based] Agent topic_agent_initialized: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:10,520 - AuditLogger - INFO - [rag_based] Agent initialize: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:33,743 - httpx - INFO - HTTP Request: POST https://begobaiatest.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview "HTTP/1.1 200 OK"
+2025-08-07 11:27:33,755 - AuditLogger - INFO - [topic_identification] Agent final_response_generated: interactive_rag_agent_topic_identifier | Task: topic_id_244984 | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:33,763 - AuditLogger - INFO - [topic_identification] Agent process_completed: interactive_rag_agent_topic_identifier | Task: topic_id_244984 | Execution: 1.32s | Compliance: compliant
+2025-08-07 11:27:33,774 - AuditLogger - INFO - [rag_based] Agent using_existing_topic_identification: interactive_rag_agent | Task: None | Execution: 0.00s | Compliance: compliant
+2025-08-07 11:27:34,332 - httpx - INFO - HTTP Request: POST https://begobaiatest.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-05-01-preview "HTTP/1.1 200 OK"
+2025-08-07 11:27:34,341 - AuditLogger - INFO - [rag_based] Agent rag_processing_completed: interactive_rag_agent | Task: rag_id_244985 | Execution: 0.57s | Compliance: compliant

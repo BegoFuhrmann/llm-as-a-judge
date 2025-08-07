@@ -7,8 +7,10 @@ import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import openai
-from openai import AsyncAzureOpenAI
-from azure.identity import DefaultAzureCredential
+from openai import AzureOpenAI
+from azure.identity import ClientSecretCredential, get_bearer_token_provider
+from dotenv import load_dotenv
+
 
 # Handle imports for both module and direct execution
 try:
@@ -38,8 +40,8 @@ class TopicIdentificationAgent(BaseAgent):
     
     def __init__(self, agent_id: str, config: Dict[str, Any] = None):
         super().__init__(agent_id, AgentType.TOPIC_IDENTIFICATION, config)
-        self.client: Optional[AsyncAzureOpenAI] = None
-        self.confidence_threshold = config.get('confidence_threshold', 0.8) if config else 0.8
+        self.client: Optional[AzureOpenAI] = None
+        self.confidence_threshold = config.get('confidence_threshold', 0.6) if config else 0.6
         self.max_topics = config.get('max_topics', 5) if config else 5
         
         # Topic classification prompts
@@ -50,36 +52,42 @@ class TopicIdentificationAgent(BaseAgent):
         We have three main knowledge sources/agents:
         1. CONFLUENCE: Contains project documentation, technical information, RPA/AI projects, development processes, BAIA, BegoChat. Best for internal, structured data.
         2. NEWHQ: Contains office facility information, building details, parking, workplace amenities, headquarters information. Best for internal, facilities-related data.
-        3. AUTONOMOUS_AGENT (Web Search): Can search the public internet for general knowledge, current events, or information not available internally.
+        3. AUTONOMOUS_AGENT (Web Search): Can search the public internet for general knowledge, current events, sports, news, or information not available internally.
         
         Analyze this query: "{query}"
+        
+        Classification Guidelines:
+        - SPORTS, NEWS, CURRENT EVENTS, GENERAL KNOWLEDGE → autonomous_agent (web search)
+        - OFFICE, FACILITIES, PARKING, BUILDING → newhq 
+        - TECHNICAL, PROJECTS, DEVELOPMENT, BAIA → confluence
         
         Provide classification for:
         1. Primary topics (up to {max_topics}) - specific topic keywords
         2. Intent classification (information_seeking, task_execution, analysis, compliance_check, etc.)
         3. Complexity level (simple, moderate, complex)
         4. Required capabilities (rag_search, web_search, computation, compliance_verification)
-        5. Confidence score (0.0 to 1.0)
+        5. Confidence score (0.0 to 1.0) - use 0.8+ for clear facility/office questions, 0.7+ for clear technical questions, 0.9+ for sports/news/current events
         6. Database/Agent recommendation (confluence, newhq, autonomous_agent, or a combination)
-        7. Domain classification (technical, business, compliance, facilities, office, general, web_search)
+        7. Domain classification (technical, business, compliance, facilities, office, general, web_search, sports, news)
         
-        Respond in JSON format:
+        IMPORTANT: Respond ONLY with valid JSON. No additional text or explanation.
+        
         {{
-            "topics": ["topic1", "topic2", ...],
+            "topics": ["topic1", "topic2"],
             "intent": "primary_intent",
             "complexity": "complexity_level",
-            "capabilities_needed": ["capability1", "capability2", ...],
-            "confidence": 0.95,
-            "database_recommendation": "confluence|newhq|autonomous_agent|unclear",
-            "routing_strategy": "strategy_description",
+            "capabilities_needed": ["capability1", "capability2"],
+            "confidence": 0.85,
+            "database_recommendation": "newhq",
+            "routing_strategy": "route_to_newhq_database",
             "metadata": {{
-                "domain": "identified_domain",
-                "urgency": "low|medium|high",
-                "estimated_processing_time": "time_estimate",
+                "domain": "facilities",
+                "urgency": "medium",
+                "estimated_processing_time": "30_seconds",
                 "topic_scores": {{
-                    "confluence_relevance": 0.0-1.0,
-                    "newhq_relevance": 0.0-1.0,
-                    "web_search_relevance": 0.0-1.0
+                    "confluence_relevance": 0.1,
+                    "newhq_relevance": 0.9,
+                    "web_search_relevance": 0.0
                 }}
             }}
         }}
@@ -88,29 +96,43 @@ class TopicIdentificationAgent(BaseAgent):
     async def initialize(self) -> bool:
         """Initialize the Azure OpenAI client and other resources."""
         try:
-            import os
-            from dotenv import load_dotenv
+            # Set NO_PROXY environment variable
+            os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
             
             load_dotenv()
             
-            # Load all required environment variables
-            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+            # Load all required environment variables using the working pattern
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://begobaiatest.openai.azure.com/")
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
             
-            default_credential = DefaultAzureCredential()
-            token = default_credential.get_token("https://cognitiveservices.azure.com/.default")
+            # Service principal credentials
+            tenant_id = os.getenv("AZURE_TENANT_ID")
+            client_id = os.getenv("AZURE_CLIENT_ID")
+            client_secret = os.getenv("AZURE_CLIENT_SECRET")
             
-            # Set token to environment variable
-            os.environ["AZURE_OPENAI_API_KEY"] = token.token
+            # Validate required environment variables
+            if not all([tenant_id, client_id, client_secret]):
+                raise ValueError("Missing required environment variables: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET")
             
-            # Ensure essential variables are present
-            if not all([azure_endpoint, os.environ["AZURE_OPENAI_API_KEY"]]):
-                raise ValueError("Missing required Azure OpenAI environment variables.")
-
-            self.client = AsyncAzureOpenAI(
-                api_key=os.environ["AZURE_OPENAI_API_KEY"],
+            # Initialize Azure credential with service principal
+            credential = ClientSecretCredential(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret
+            )
+            
+            # Create token provider for Azure OpenAI
+            token_provider = get_bearer_token_provider(
+                credential,
+                "https://cognitiveservices.azure.com/.default"
+            )
+            
+            # Initialize Azure OpenAI client with service principal authentication
+            self.client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                azure_ad_token_provider=token_provider,
                 api_version=api_version,
-                azure_endpoint=azure_endpoint
             )
             
             # Test the connection
@@ -133,12 +155,19 @@ class TopicIdentificationAgent(BaseAgent):
     
     async def _test_connection(self):
         """Test the Azure OpenAI connection."""
-        response = await self.client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": "Test connection"}],
-            max_tokens=10
-        )
-        return response.choices[0].message.content
+        # Convert to async by running in executor since we're using sync client
+        import asyncio
+        loop = asyncio.get_event_loop()
+        
+        def sync_test():
+            response = self.client.chat.completions.create(
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+                messages=[{"role": "user", "content": "Test connection"}],
+                max_tokens=10
+            )
+            return response.choices[0].message.content
+        
+        return await loop.run_in_executor(None, sync_test)
     
     async def process(self, task: Task) -> AgentResponse:
         """
@@ -164,6 +193,9 @@ class TopicIdentificationAgent(BaseAgent):
             # Perform topic identification
             identification_result = await self._identify_topics(query)
             
+            # Generate final response
+            final_response = self._generate_final_response(query, identification_result)
+            
             # Validate results
             if identification_result['confidence'] < self.confidence_threshold:
                 await audit_logger.log_agent_action(
@@ -172,15 +204,33 @@ class TopicIdentificationAgent(BaseAgent):
                     confidence=identification_result['confidence'],
                     threshold=self.confidence_threshold
                 )
+                # Override result for low confidence: force autonomous_agent routing
+                identification_result.update({
+                    'capabilities_needed': ['web_search'],
+                    'database_recommendation': 'autonomous_agent',
+                    'routing_strategy': 'route_to_autonomous_agent'
+                })
+                # Update final response for low confidence routing
+                final_response = self._generate_final_response(query, identification_result)
             
             execution_time = time.time() - start_time
+            
+            # Log the final response
+            await audit_logger.log_agent_action(
+                self.agent_id, self.agent_type, "final_response_generated",
+                task=task, log_level=LogLevel.INFO,
+                final_response=final_response,
+                database_recommendation=identification_result.get('database_recommendation'),
+                confidence=identification_result.get('confidence')
+            )
             
             response = AgentResponse(
                 success=True,
                 data={
                     'original_query': query,
                     'identification_result': identification_result,
-                    'routing_recommendation': self._generate_routing_recommendation(identification_result)
+                    'routing_recommendation': self._generate_routing_recommendation(identification_result),
+                    'final_response': final_response
                 },
                 confidence_score=identification_result['confidence'],
                 execution_time=execution_time,
@@ -211,34 +261,60 @@ class TopicIdentificationAgent(BaseAgent):
     
     async def _identify_topics(self, query: str) -> Dict[str, Any]:
         """Use Azure OpenAI to identify topics and intent."""
+        import json  # Move import to top of method
+        import asyncio
+        
         try:
             prompt = self.classification_prompt.format(
                 query=query,
                 max_topics=self.max_topics
             )
             
-            response = await self.client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": "You are an expert topic identification system."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                temperature=0.1
-            )
+            # Convert to async by running in executor since we're using sync client
+            loop = asyncio.get_event_loop()
+            
+            def sync_chat_completion():
+                return self.client.chat.completions.create(
+                    model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
+                    messages=[
+                        {"role": "system", "content": "You are an expert topic identification system. Always respond with valid JSON only, no additional text."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.1,
+                    response_format={"type": "json_object"}
+                )
+            
+            response = await loop.run_in_executor(None, sync_chat_completion)
             
             # Parse JSON response
-            import json
-            result = json.loads(response.choices[0].message.content)
+            response_content = response.choices[0].message.content
+            
+            # Log the raw response for debugging
+            await audit_logger.log_agent_action(
+                self.agent_id, self.agent_type, "azure_openai_response",
+                log_level=LogLevel.DEBUG,
+                response_content=response_content[:500]  # First 500 chars
+            )
+            
+            result = json.loads(response_content)
             
             # Add additional analysis
             result['query_length'] = len(query)
             result['word_count'] = len(query.split())
             result['analysis_timestamp'] = datetime.now().isoformat()
+            result['fallback_used'] = False
             
             return result
             
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # Log JSON parsing error
+            await audit_logger.log_agent_action(
+                self.agent_id, self.agent_type, "json_parse_error",
+                log_level=LogLevel.WARNING,
+                error=str(e),
+                response_content=response.choices[0].message.content[:200] if 'response' in locals() and response.choices else "No response content"
+            )
             # Fallback analysis if JSON parsing fails
             return self._fallback_analysis(query)
         except Exception as e:
@@ -257,8 +333,14 @@ class TopicIdentificationAgent(BaseAgent):
             },
             'newhq': {
                 'keywords': ['office', 'building', 'parking', 'facilities', 'location', 'space', 
-                           'headquarters', 'workplace', 'infrastructure', 'amenities', 'newhq'],
+                           'headquarters', 'workplace', 'infrastructure', 'amenities', 'newhq', 'new', 'hq'],
                 'domain': 'facilities'
+            },
+            'web_search': {
+                'keywords': ['coach', 'sport', 'sports', 'football', 'soccer', 'team', 'player', 'current', 
+                           'news', 'weather', 'celebrity', 'movie', 'tv', 'music', 'general', 'public',
+                           'hamburger', 'sv', 'hsv', 'bundesliga', 'manager', 'trainer'],
+                'domain': 'web_search'
             },
             'compliance': {
                 'keywords': ['compliance', 'regulation', 'policy', 'audit', 'legal'],
@@ -273,6 +355,7 @@ class TopicIdentificationAgent(BaseAgent):
         identified_topics = []
         confluence_score = 0
         newhq_score = 0
+        web_search_score = 0
         domain_detected = 'general'
         
         for category, data in domain_keywords.items():
@@ -281,38 +364,54 @@ class TopicIdentificationAgent(BaseAgent):
                 identified_topics.extend([kw for kw in data['keywords'] if kw in keywords])
                 
                 if category == 'confluence':
-                    confluence_score += matches
+                    confluence_score += matches * 0.5  # Weighted scoring
+                    if matches >= 2:  # Bonus for multiple matches
+                        confluence_score += 0.3
                     domain_detected = data['domain']
                 elif category == 'newhq':
-                    newhq_score += matches
+                    newhq_score += matches * 0.5  # Weighted scoring
+                    if matches >= 2:  # Bonus for multiple matches
+                        newhq_score += 0.3
+                    domain_detected = data['domain']
+                elif category == 'web_search':
+                    web_search_score += matches * 0.5  # Weighted scoring
+                    if matches >= 2:  # Bonus for multiple matches
+                        web_search_score += 0.3
                     domain_detected = data['domain']
         
         # Determine database recommendation
-        if newhq_score > confluence_score:
+        if web_search_score > max(newhq_score, confluence_score):
+            database_recommendation = 'autonomous_agent'
+        elif newhq_score > confluence_score:
             database_recommendation = 'newhq'
         elif confluence_score > newhq_score:
             database_recommendation = 'confluence'
         elif confluence_score > 0 and newhq_score > 0:
             database_recommendation = 'both'
         else:
-            database_recommendation = 'unclear'
+            database_recommendation = 'autonomous_agent'  # Default to web search for unclear queries
+        
+        # Calculate confidence based on best match
+        best_score = max(newhq_score, confluence_score, web_search_score, 0.1)
+        confidence = min(0.5 + (best_score * 0.2), 0.9)  # Base 0.5, up to 0.9 for strong matches
         
         return {
             'topics': list(set(identified_topics[:self.max_topics])),
             'intent': 'information_seeking',
             'complexity': 'moderate',
-            'capabilities_needed': ['rag_search'],
-            'confidence': 0.6,
+            'capabilities_needed': ['web_search'] if database_recommendation == 'autonomous_agent' else ['rag_search'],
+            'confidence': confidence,
             'database_recommendation': database_recommendation,
-            'routing_strategy': f'route_to_{database_recommendation}_database',
+            'routing_strategy': f'route_to_{database_recommendation}_database' if database_recommendation != 'autonomous_agent' else 'route_to_autonomous_agent',
             'metadata': {
                 'domain': domain_detected,
                 'urgency': 'medium',
                 'estimated_processing_time': '30_seconds',
                 'fallback_used': True,
                 'topic_scores': {
-                    'confluence_relevance': confluence_score / max(len(keywords), 1),
-                    'newhq_relevance': newhq_score / max(len(keywords), 1)
+                    'confluence_relevance': confluence_score,
+                    'newhq_relevance': newhq_score,
+                    'web_search_relevance': web_search_score
                 }
             }
         }
@@ -323,8 +422,13 @@ class TopicIdentificationAgent(BaseAgent):
         complexity = identification_result.get('complexity', 'moderate')
         confidence = identification_result.get('confidence', 0.5)
         
-        # Determine primary agent routing
-        if 'compliance_verification' in capabilities:
+        # Determine primary agent routing - Force web search for low confidence
+        if confidence < self.confidence_threshold:
+            # Low confidence always triggers web search through AutonomousAgent
+            primary_agent = AgentType.AUTONOMOUS
+            if 'web_search' not in capabilities:
+                capabilities.append('web_search')
+        elif 'compliance_verification' in capabilities:
             primary_agent = AgentType.COMPLIANCE_MONITORING
         elif 'web_search' in capabilities or complexity == 'complex':
             primary_agent = AgentType.AUTONOMOUS
@@ -384,8 +488,7 @@ class TopicIdentificationAgent(BaseAgent):
         """Shutdown the agent gracefully."""
         try:
             self.is_active = False
-            if self.client:
-                await self.client.close()
+            # Note: sync client doesn't need async close()
             
             await audit_logger.log_agent_action(
                 self.agent_id, self.agent_type, "shutdown",
@@ -460,3 +563,69 @@ class TopicIdentificationAgent(BaseAgent):
             return f"Query spans multiple domains ({domain}), searching both databases for topics: {', '.join(topics[:3])}"
         else:
             return f"Unclear routing for general query, using fallback strategy (confidence: {confidence:.2f})"
+    
+    def _generate_final_response(self, query: str, identification_result: Dict[str, Any]) -> str:
+        """Generate a comprehensive final response about the query routing decision."""
+        database_rec = identification_result.get('database_recommendation', 'unclear')
+        topics = identification_result.get('topics', [])
+        domain = identification_result.get('metadata', {}).get('domain', 'general')
+        confidence = identification_result.get('confidence', 0.5)
+        intent = identification_result.get('intent', 'information_seeking')
+        complexity = identification_result.get('complexity', 'moderate')
+        
+        # Build response based on database recommendation
+        if database_rec == 'newhq':
+            response = f"Query '{query}' has been analyzed and routed to the NewHQ facilities database. "
+            response += f"This appears to be a {domain}-related question about {', '.join(topics[:3])} "
+            response += f"with {confidence:.1%} confidence. The system will search the NewHQ knowledge base "
+            response += f"to provide information about office facilities, building details, or workplace amenities."
+            
+        elif database_rec == 'confluence':
+            response = f"Query '{query}' has been routed to the Confluence technical database. "
+            response += f"This appears to be a {domain}-related question about {', '.join(topics[:3])} "
+            response += f"with {confidence:.1%} confidence. The system will search project documentation, "
+            response += f"technical information, and development processes to answer your question."
+            
+        elif database_rec == 'autonomous_agent':
+            # Check if it's a sports-related query for more specific messaging
+            is_sports = any(topic.lower() in ['sports', 'football', 'coach', 'team', 'hamburger sv'] for topic in topics)
+            
+            if is_sports:
+                response = f"Query '{query}' has been analyzed and will be processed by the autonomous web search agent. "
+                response += f"This appears to be a sports-related question about {', '.join(topics[:3])} "
+                response += f"with {confidence:.1%} confidence. The system will perform a live web search to find "
+                response += f"current information, as sports data (team rosters, current coaches, recent transfers) "
+                response += f"changes frequently and requires up-to-date external sources. The autonomous agent will "
+                response += f"search multiple sports websites, validate the information, and provide you with the most "
+                response += f"current answer available."
+            else:
+                response = f"Query '{query}' will be handled by the autonomous web search agent. "
+                response += f"This appears to be a {domain} question about {', '.join(topics[:3])} "
+                response += f"with {confidence:.1%} confidence. The system will search the public internet "
+                response += f"for current information, as this query likely requires external knowledge not available in internal databases."
+            
+        elif database_rec == 'both':
+            response = f"Query '{query}' spans multiple knowledge domains and will search both internal databases. "
+            response += f"This {domain} question about {', '.join(topics[:3])} will be processed by both "
+            response += f"Confluence and NewHQ databases to provide comprehensive information."
+            
+        else:
+            response = f"Query '{query}' has unclear routing requirements. "
+            response += f"The system identified this as a {domain} question with {confidence:.1%} confidence "
+            response += f"but will use fallback routing to ensure you receive an appropriate response."
+        
+        # Add complexity and processing information
+        if complexity == 'complex':
+            response += f" Due to the complex nature of this query, additional processing time may be required."
+        elif complexity == 'simple':
+            response += f" This appears to be a straightforward query that should be resolved quickly."
+        
+        # Add intent information
+        if intent == 'information_seeking':
+            response += f" The system will focus on providing informational content to answer your question."
+        elif intent == 'task_execution':
+            response += f" The system will attempt to help you complete the requested task."
+        elif intent == 'compliance_check':
+            response += f" The system will review compliance requirements related to your query."
+        
+        return response

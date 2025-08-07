@@ -1,5 +1,5 @@
 """
-Comprehensive audit logging and observability system for the agentic framework.
+Audit logging system for the agentic framework.
 """
 import json
 import logging
@@ -9,6 +9,30 @@ from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import uuid
+
+# Custom JSON encoder for datetime objects
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, datetime):
+            return o.isoformat()
+        return super().default(o)
+
+def convert_datetime_to_string(obj):
+    """Recursively convert datetime objects to ISO format strings."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: convert_datetime_to_string(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetime_to_string(item) for item in obj]
+    elif hasattr(obj, '__dict__'):
+        # Handle dataclass or object instances
+        if hasattr(obj, 'to_dict'):
+            return obj.to_dict()
+        else:
+            return convert_datetime_to_string(obj.__dict__)
+    else:
+        return obj
 
 # Handle imports for both module and direct execution
 try:
@@ -49,7 +73,8 @@ class AuditEvent:
     def to_dict(self) -> Dict[str, Any]:
         """Convert audit event to dictionary."""
         data = asdict(self)
-        data['timestamp'] = self.timestamp.isoformat()
+        # Convert all datetime objects recursively
+        data = convert_datetime_to_string(data)
         data['agent_type'] = self.agent_type.value
         data['log_level'] = self.log_level.value
         data['compliance_level'] = self.compliance_level.value
@@ -133,7 +158,7 @@ class AuditLogger:
         """Write detailed event data to JSON file."""
         event_file = self.log_dir / f"events_{datetime.now().strftime('%Y%m%d')}.jsonl"
         with open(event_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(event.to_dict()) + '\n')
+            f.write(json.dumps(event.to_dict(), cls=DateTimeEncoder) + '\n')
     
     async def log_agent_action(self, 
                              agent_id: str,
@@ -144,6 +169,10 @@ class AuditLogger:
                              log_level: LogLevel = LogLevel.INFO,
                              **kwargs):
         """Log an agent action with comprehensive details."""
+        # Convert input and output data to handle datetime objects
+        input_data = convert_datetime_to_string(task.input_data if task else {})
+        output_data = convert_datetime_to_string(response.data if response else {})
+        
         event = AuditEvent(
             agent_id=agent_id,
             agent_type=agent_type,
@@ -151,12 +180,12 @@ class AuditLogger:
             log_level=log_level,
             message=f"Agent {action}: {agent_id}",
             task_id=task.id if task else None,
-            input_data=task.input_data if task else {},
-            output_data=response.data if response else {},
+            input_data=input_data,
+            output_data=output_data,
             execution_time=response.execution_time if response else 0.0,
             error_details=response.error_message if response and not response.success else None,
             compliance_level=self._assess_compliance(response) if response else ComplianceLevel.COMPLIANT,
-            metadata=kwargs
+            metadata=convert_datetime_to_string(kwargs)
         )
         await self.log_event(event)
     
