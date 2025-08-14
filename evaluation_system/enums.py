@@ -35,3 +35,8 @@ class EvaluationDimension(Enum):
     REASONING_DEPTH = "reasoning_depth"
     ADAPTABILITY = "adaptability"
     EFFICIENCY = "efficiency"
+    
+    # Regulatory Compliance Dimensions
+    GDPR_COMPLIANCE = "gdpr_compliance"
+    EU_AI_ACT_ALIGNMENT = "eu_ai_act_alignment"
+    AUDIT_TRAIL_QUALITY = "audit_trail_quality"

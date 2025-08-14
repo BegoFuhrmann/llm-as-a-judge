@@ -211,6 +211,36 @@ class AdvancedEvalConfig:
                 criteria_1="Missing, invalid, or misleading citations",
                 weight=0.07
             ),
+            EvaluationDimension.GDPR_COMPLIANCE: EvaluationRubric(
+                dimension=EvaluationDimension.GDPR_COMPLIANCE,
+                description="Adherence to GDPR data protection principles and requirements",
+                criteria_5="Full GDPR compliance with explicit consent, data minimization, and clear legal basis",
+                criteria_4="Strong GDPR adherence with minor procedural gaps",
+                criteria_3="Generally GDPR compliant with some technical requirements missing",
+                criteria_2="Partial GDPR compliance with significant gaps in data protection",
+                criteria_1="Poor GDPR compliance with potential legal violations",
+                weight=0.12
+            ),
+            EvaluationDimension.EU_AI_ACT_ALIGNMENT: EvaluationRubric(
+                dimension=EvaluationDimension.EU_AI_ACT_ALIGNMENT,
+                description="Conformity with EU AI Act requirements for AI system transparency and risk management",
+                criteria_5="Fully compliant with EU AI Act including risk assessment, transparency, and human oversight",
+                criteria_4="Strong AI Act alignment with minor documentation gaps",
+                criteria_3="Generally compliant with some risk management deficiencies",
+                criteria_2="Partial AI Act compliance with significant regulatory gaps",
+                criteria_1="Poor AI Act alignment with potential regulatory violations",
+                weight=0.12
+            ),
+            EvaluationDimension.AUDIT_TRAIL_QUALITY: EvaluationRubric(
+                dimension=EvaluationDimension.AUDIT_TRAIL_QUALITY,
+                description="Completeness and quality of audit documentation and traceability",
+                criteria_5="Comprehensive audit trail with complete decision traceability and metadata",
+                criteria_4="Good audit documentation with minor logging gaps",
+                criteria_3="Adequate audit trail with some missing decision points",
+                criteria_2="Partial audit documentation with significant traceability gaps",
+                criteria_1="Poor or missing audit trail compromising accountability",
+                weight=0.08
+            ),
         }
         
         # Apply profile-specific weight adjustments
