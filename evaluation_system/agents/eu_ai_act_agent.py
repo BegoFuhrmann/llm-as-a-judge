@@ -29,7 +29,7 @@ class EUAIActAgent(RAGAgent):
             db_path: Path to the EU AI Act knowledge base
         """
         super().__init__(
-            collection_name="eu_ai_act_compliance",
+            collection_name="eu_ai_act_2024",
             db_path=db_path,
             agent_name="EU AI Act Compliance Agent"
         )

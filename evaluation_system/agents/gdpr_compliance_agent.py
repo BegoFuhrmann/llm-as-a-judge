@@ -30,7 +30,7 @@ class GDPRComplianceAgent(RAGAgent):
             db_path: Path to the GDPR knowledge base
         """
         super().__init__(
-            collection_name="gdpr_compliance",
+            collection_name="gdpr_2016",
             db_path=db_path,
             agent_name="GDPR Compliance Agent"
         )
