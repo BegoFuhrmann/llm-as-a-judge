@@ -84,7 +84,11 @@ class EvaluationConfig:
         EvaluationDimension.RELEVANCE,
         EvaluationDimension.COMPLETENESS,
         EvaluationDimension.CLARITY,
-        EvaluationDimension.CITATION_QUALITY
+        EvaluationDimension.CITATION_QUALITY,
+        # Include regulatory dimensions by default
+        EvaluationDimension.GDPR_COMPLIANCE,
+        EvaluationDimension.EU_AI_ACT_ALIGNMENT,
+        EvaluationDimension.AUDIT_TRAIL_QUALITY
     ])
     
     # Academic rigor settings
@@ -157,6 +161,20 @@ class AdvancedEvalConfig:
             self.rubrics = self._get_default_rubrics()
         self._apply_environment_variables()
         self._validate_configuration()
+        
+        # Compatibility: expose dimensions at top level for existing evaluation code
+        self.dimensions = self.evaluation.dimensions
+        
+        # Additional compatibility attributes
+        self.azure_endpoint = self.llm_provider.azure_endpoint
+        self.deployment_name = self.llm_provider.azure_deployment
+        self.api_version = self.llm_provider.azure_api_version
+        self.model_name = self.llm_provider.model_name
+        self.temperature = self.llm_provider.temperature
+        self.max_retries = self.llm_provider.max_retries
+        self.retry_delay = self.llm_provider.retry_delay
+        self.timeout = self.llm_provider.timeout
+        self.confidence_threshold = self.evaluation.confidence_threshold
     
     def _get_default_rubrics(self) -> Dict[EvaluationDimension, EvaluationRubric]:
         """Get default academic rubrics with profile-specific weights."""
@@ -286,6 +304,22 @@ class AdvancedEvalConfig:
         total_weight = sum(rubric.weight for rubric in self.rubrics.values())
         if not (0.7 <= total_weight <= 1.0):
             logger.warning(f"Dimension weights sum to {total_weight:.3f}, should be ~0.8-1.0")
+
+        # Validate regulatory dimension weights
+        regulatory_dimensions = [
+            EvaluationDimension.GDPR_COMPLIANCE,
+            EvaluationDimension.EU_AI_ACT_ALIGNMENT,
+            EvaluationDimension.AUDIT_TRAIL_QUALITY
+        ]
+        regulatory_weight = sum(self.rubrics[dim].weight for dim in regulatory_dimensions if dim in self.rubrics)
+        
+        if total_weight > 0:
+            regulatory_percentage = (regulatory_weight / total_weight) * 100
+            if not (20 <= regulatory_percentage <= 40):
+                logger.warning(
+                    f"Regulatory dimensions constitute {regulatory_percentage:.1f}% of total weight, "
+                    f"which is outside the recommended 20-40% range."
+                )
         
         # Validate thresholds
         if not (0.0 <= self.evaluation.confidence_threshold <= 1.0):
